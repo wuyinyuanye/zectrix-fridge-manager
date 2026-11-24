@@ -1,7 +1,7 @@
 > **极趣小冰箱 (Zectrix Fridge Manager)** — this repository is a fridge-inventory,
-> recipe and voice-assistant firmware for ZECTRIX NOTE4, built on top of the official
-> [Zectrix Lab NOTE4 E-Paper Reference Demo](https://github.com/itopinion/zectrix-note4-epd-demo)
-> (MIT). The board, e-paper and self-test components below come from that reference;
+> recipe and voice-assistant firmware for ZECTRIX NOTE4, built on the NOTE4 hardware
+> drivers provided by Zectrix Lab (MIT License). The board, e-paper and self-test
+> components below come from those drivers;
 > the fridge application lives in `main/`. See **[README_FRIDGE.md](README_FRIDGE.md)**
 > for the fridge firmware, build steps and font setup.
 

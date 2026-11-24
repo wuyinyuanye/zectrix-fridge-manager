@@ -57,4 +57,4 @@
 
 ## 六、 致谢与许可
 
-底层墨水屏驱动、板级驱动（电池、RTC、NFC、ES8311 声卡）与自检组件来自 Zectrix Lab 官方 [NOTE4 E-Paper Reference Demo](https://github.com/itopinion/zectrix-note4-epd-demo)（MIT License）。冰箱应用（`main/` 下的库存、食谱、语音、Web 管理台与界面）在此基础上开发。第三方组件见 `THIRD_PARTY_NOTICES.md`。
+底层墨水屏驱动、板级驱动（电池、RTC、NFC、ES8311 声卡）与自检组件基于 Zectrix Lab 提供的 NOTE4 硬件驱动（MIT License）。冰箱应用（`main/` 下的库存、食谱、语音、Web 管理台与界面）在此基础上开发。第三方组件见 `THIRD_PARTY_NOTICES.md`。
