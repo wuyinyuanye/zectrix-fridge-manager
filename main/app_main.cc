@@ -133,6 +133,7 @@ public:
         }
 
         tab_ = store_.GetConfig().wifi_ssid.empty() ? FridgeTab::kSettings : FridgeTab::kFridge;
+        nav_focus_ = (tab_ != FridgeTab::kSettings);  // start on the top menu bar
         selected_ = 0;
         last_activity_ms_ = NowMs();
         RenderCurrentTab(true);
@@ -219,6 +220,7 @@ public:
             const int ptab = pending_tab_.exchange(-1);
             if (ptab >= 0 && ptab < static_cast<int>(FridgeTab::kCount)) {
                 tab_ = static_cast<FridgeTab>(ptab);
+                nav_focus_ = false;
                 selected_ = 0;
                 if (tab_ == FridgeTab::kRecipe) {
                     focus_ingredient_.clear();
@@ -278,6 +280,13 @@ public:
                 continue;
             }
 
+            // Global: UP hold (600ms) -> jump straight back to the top menu bar
+            if (ev.button == ZectrixButton::kUp && ev.action == ZectrixButtonAction::kLongPress) {
+                EnterNavFocus();
+                board_.DrainButtons();
+                continue;
+            }
+
             // Global: OK hold (350ms) -> True PTT Voice Recording with clear center result popup!
             if (ev.button == ZectrixButton::kOk && ev.action == ZectrixButtonAction::kLongPress) {
                 RunPttVoiceFlow();
@@ -297,6 +306,9 @@ public:
                         if (next_ev.button == ZectrixButton::kDown) {
                             RequestSleepOrConfirm(false);
                             requested_sleep = true;
+                        } else if (next_ev.button == ZectrixButton::kUp) {
+                            EnterNavFocus();
+                            requested_sleep = true;  // consumed: skip the queued click
                         }
                         break;
                     }
@@ -361,6 +373,7 @@ private:
 
     UiTopBar BuildTopBar() {
         UiTopBar bar;
+        bar.nav_focus = nav_focus_;
         bar.hm_time = FridgeStore::NowHmString();
         bar.wifi_ok = wifi_web_.is_wifi_connected();
         bar.ap_mode = wifi_web_.is_ap_mode();
@@ -388,14 +401,14 @@ private:
                 int c_all = 0, c_exp = 0, c_fr = 0, c_fz = 0;
                 const auto items = store_.GetItemsFiltered(ZoneFilter::kAll, &c_all, &c_exp, &c_fr, &c_fz);
                 selected_ = items.empty() ? 0 : std::clamp(selected_, 0, static_cast<int>(items.size()) - 1);
-                ui_.RenderFridgePage(bar, c_all, c_fr, c_fz, items, selected_, force_full);
+                ui_.RenderFridgePage(bar, c_all, c_fr, c_fz, items, nav_focus_ ? -1 : selected_, force_full);
                 break;
             }
             case FridgeTab::kRecipe: {
                 const auto recipes = store_.GetMatchedRecipesSorted(focus_ingredient_);
                 recipe_idx_ = recipes.empty() ? 0 : std::clamp(recipe_idx_, 0, static_cast<int>(recipes.size()) - 1);
                 selected_ = std::clamp(selected_, 0, 2);
-                ui_.RenderRecipePage(bar, recipes, recipe_idx_, selected_, force_full);
+                ui_.RenderRecipePage(bar, recipes, recipe_idx_, nav_focus_ ? -1 : selected_, force_full);
                 break;
             }
             case FridgeTab::kCook: {
@@ -415,7 +428,7 @@ private:
             case FridgeTab::kShopping: {
                 const auto list = store_.GetShoppingList();
                 selected_ = list.empty() ? 0 : std::clamp(selected_, 0, static_cast<int>(list.size()));
-                ui_.RenderShoppingPage(bar, list, selected_, force_full);
+                ui_.RenderShoppingPage(bar, list, nav_focus_ ? -1 : selected_, force_full);
                 break;
             }
             case FridgeTab::kSettings: {
@@ -426,7 +439,7 @@ private:
                 const std::string cap = ap ? "扫码连配网热点" : "扫码打开管理页";
                 ui_.RenderSettingsPage(bar, cfg, wifi_web_.ip_address(),
                                        qr, cap, wifi_web_.ap_password(),
-                                       board_.ReadPowerSnapshot(), selected_, force_full);
+                                       board_.ReadPowerSnapshot(), nav_focus_ ? -1 : selected_, force_full);
                 break;
             }
             default:
@@ -440,28 +453,61 @@ private:
     //   DOWN click = ALWAYS move to next item / next button / next cooking step
     //   OK   click = ALWAYS execute the single highlighted item
     // ========================================================================
+    // Focus model:
+    //   MENU (top tab bar): UP/DOWN pick a page (wrapping), OK enters that page.
+    //   PAGE: DOWN moves down (wrapping); UP moves up and, from the first item, returns
+    //         to the MENU. Holding UP returns to the MENU from anywhere.
+    void EnterNavFocus() {
+        nav_focus_ = true;
+        selected_ = 0;
+        RenderCurrentTab(false);
+    }
+
     void HandleFlatClick(ZectrixButton btn, int steps = 1) {
         steps = std::max(1, steps);
-        // RULE 1: UP ALWAYS switches page (coalesces rapid taps into 1 crisp refresh!)
-        if (btn == ZectrixButton::kUp) {
-            tab_ = static_cast<FridgeTab>((static_cast<int>(tab_) + steps) %
-                                          static_cast<int>(FridgeTab::kCount));
-            selected_ = 0;
-            RenderCurrentTab(false);
+        const int n_tabs = static_cast<int>(FridgeTab::kCount);
+
+        if (nav_focus_) {
+            if (btn == ZectrixButton::kUp || btn == ZectrixButton::kDown) {
+                const int dir = (btn == ZectrixButton::kUp) ? -1 : 1;
+                const int t = static_cast<int>(tab_) + dir * steps;
+                tab_ = static_cast<FridgeTab>(((t % n_tabs) + n_tabs) % n_tabs);
+                selected_ = 0;
+                RenderCurrentTab(false);
+            } else if (btn == ZectrixButton::kOk) {
+                nav_focus_ = false;
+                selected_ = 0;
+                RenderCurrentTab(false);
+            }
             return;
         }
+
+        // Inside a page. Returns false when UP walked off the top (focus went to the MENU).
+        auto move = [&](int* idx, int n) -> bool {
+            if (btn == ZectrixButton::kUp) {
+                if (*idx - steps < 0) {
+                    EnterNavFocus();
+                    return false;
+                }
+                *idx -= steps;
+            } else {
+                *idx = (n <= 0) ? 0 : (*idx + steps) % n;
+            }
+            return true;
+        };
+        const bool is_nav_key = (btn == ZectrixButton::kUp || btn == ZectrixButton::kDown);
 
         // ---- Page 1: Fridge Inventory ----
         if (tab_ == FridgeTab::kFridge) {
             const auto items = store_.GetItemsFiltered(ZoneFilter::kAll);
             if (items.empty()) {
-                RenderCurrentTab(false);
+                if (btn == ZectrixButton::kUp) EnterNavFocus();
+                else RenderCurrentTab(false);
                 return;
             }
             const int n = static_cast<int>(items.size());
-            if (btn == ZectrixButton::kDown) {
-                selected_ = (selected_ + steps) % n;
-                RenderCurrentTab(false);
+            if (is_nav_key) {
+                if (move(&selected_, n)) RenderCurrentTab(false);
             } else if (btn == ZectrixButton::kOk) {
                 RunItemPopup(items[std::clamp(selected_, 0, n - 1)]);
             }
@@ -471,16 +517,19 @@ private:
         // ---- Page 2: Interlocking Recipe (3 bottom buttons) ----
         if (tab_ == FridgeTab::kRecipe) {
             const auto recipes = store_.GetMatchedRecipesSorted(focus_ingredient_);
-            if (recipes.empty()) return;
-            if (btn == ZectrixButton::kDown) {
-                selected_ = (selected_ + steps) % 3;
-                RenderCurrentTab(false);
+            if (recipes.empty()) {
+                if (btn == ZectrixButton::kUp) EnterNavFocus();
+                return;
+            }
+            if (is_nav_key) {
+                if (move(&selected_, 3)) RenderCurrentTab(false);
             } else if (btn == ZectrixButton::kOk) {
                 const int ri = std::clamp(recipe_idx_, 0, static_cast<int>(recipes.size()) - 1);
                 const auto& mv = recipes[ri];
                 if (selected_ == 0) {
                     cook_step_idx_ = 0;
                     tab_ = FridgeTab::kCook;
+                    nav_focus_ = false;
                     selected_ = 0;
                     RenderCurrentTab(false);
                 } else if (selected_ == 1) {
@@ -515,16 +564,27 @@ private:
                                              ? nullptr
                                              : &recipes[std::clamp(recipe_idx_, 0, static_cast<int>(recipes.size()) - 1)];
             const int n_steps = (cur != nullptr) ? static_cast<int>(cur->recipe.steps.size()) : 0;
-            if (n_steps == 0) return;
+            if (n_steps == 0) {
+                if (btn == ZectrixButton::kUp) EnterNavFocus();
+                return;
+            }
 
-            if (btn == ZectrixButton::kDown) {
-                cook_step_idx_ = (cook_step_idx_ + steps) % n_steps;
-                RenderCurrentTab(false);
+            if (is_nav_key) {
+                if (move(&cook_step_idx_, n_steps)) RenderCurrentTab(false);
             } else if (btn == ZectrixButton::kOk) {
                 const int st_i = std::clamp(cook_step_idx_, 0, n_steps - 1);
                 const auto& st = cur->recipe.steps[st_i];
+                uint32_t running_id = 0;
+                for (const auto& t : store_.GetTimers()) {
+                    if (t.active && t.label == cur->recipe.title) { running_id = t.id; break; }
+                }
                 if (st_i == n_steps - 1) {
                     RunCookDonePopup(*cur);
+                } else if (running_id != 0) {
+                    // Button shows "计时中 · 按OK停止": OK cancels this recipe's step timer
+                    store_.StopTimer(running_id);
+                    audio_.PlayChimeStop();
+                    RenderCurrentTab(false);
                 } else {
                     const int mins = (st.timer_min > 0) ? st.timer_min : 5;
                     store_.StartTimer(cur->recipe.title, mins);
@@ -539,13 +599,13 @@ private:
         if (tab_ == FridgeTab::kShopping) {
             const auto list = store_.GetShoppingList();
             if (list.empty()) {
-                RenderCurrentTab(false);
+                if (btn == ZectrixButton::kUp) EnterNavFocus();
+                else RenderCurrentTab(false);
                 return;
             }
             const int total = static_cast<int>(list.size()) + 1;
-            if (btn == ZectrixButton::kDown) {
-                selected_ = (selected_ + steps) % total;
-                RenderCurrentTab(false);
+            if (is_nav_key) {
+                if (move(&selected_, total)) RenderCurrentTab(false);
             } else if (btn == ZectrixButton::kOk) {
                 if (selected_ < static_cast<int>(list.size())) {
                     store_.ToggleShoppingItem(list[selected_].id);
@@ -566,7 +626,7 @@ private:
                                            std::to_string(skipped_full) + " 样因满80样保留在采购单",
                                        false);
                     } else {
-                        ShowBriefPopup(false, "", "请先用下键选物品、按 OK 勾选已买项", false);
+                        ShowBriefPopup(false, "", "请先用上下键选物品、按 OK 勾选已买项", false);
                     }
                     RenderCurrentTab(false);
                 }
@@ -576,9 +636,8 @@ private:
 
         // ---- Page 5: Settings (4 clear buttons, NO NFC!) ----
         if (tab_ == FridgeTab::kSettings) {
-            if (btn == ZectrixButton::kDown) {
-                selected_ = (selected_ + steps) % 4;
-                RenderCurrentTab(false);
+            if (is_nav_key) {
+                if (move(&selected_, 4)) RenderCurrentTab(false);
             } else if (btn == ZectrixButton::kOk) {
                 if (selected_ == 0) {
                     RunVoiceHelpPopup();
@@ -621,6 +680,7 @@ private:
                         recipe_idx_ = 0;
                         cook_step_idx_ = 0;
                         tab_ = FridgeTab::kRecipe;
+                        nav_focus_ = false;
                         selected_ = 0;
                         RenderCurrentTab(false);
                         return;
@@ -650,6 +710,7 @@ private:
                         recipe_idx_ = 0;
                         cook_step_idx_ = 0;
                         tab_ = FridgeTab::kRecipe;
+                        nav_focus_ = false;
                         selected_ = 0;
                         RenderCurrentTab(false);
                         return;
@@ -701,6 +762,7 @@ private:
                     ShowBriefPopup(true, "开饭啦!",
                                    "已自动扣减 " + std::to_string(n) + " 样用掉的食材", false);
                     tab_ = FridgeTab::kFridge;
+                    nav_focus_ = false;
                     selected_ = 0;
                     RenderCurrentTab(false);
                     return;
@@ -859,7 +921,7 @@ private:
         const AppConfig cfg = store_.GetConfig();
         if (!wifi_web_.is_wifi_connected()) {
             audio_.PlayChimeError();
-            ShowBriefPopup(false, "", "当前未连 Wi-Fi：请按上键去[设置]连上家庭 2.4G Wi-Fi", false);
+            ShowBriefPopup(false, "", "当前未连 Wi-Fi：请回到顶部菜单进入[设置]连上家庭 2.4G Wi-Fi", false);
             RenderCurrentTab(false);
             return;
         }
@@ -931,14 +993,17 @@ private:
             }
             cook_step_idx_ = std::clamp(cook_step_idx_ + r.step_delta, 0, max_step);
             tab_ = FridgeTab::kCook;
+            nav_focus_ = false;
         } else if (r.recipe_updated) {
             focus_ingredient_.clear();
             tab_ = FridgeTab::kRecipe;
+            nav_focus_ = false;
             recipe_idx_ = 0;
             cook_step_idx_ = 0;
             selected_ = 0;
         } else if (r.timer_started) {
             tab_ = FridgeTab::kCook;
+            nav_focus_ = false;
         }
 
         const bool want_undo = ShowBriefPopup(true,
@@ -1060,6 +1125,7 @@ private:
 
     FridgeTab tab_ = FridgeTab::kFridge;
     int selected_ = 0;
+    bool nav_focus_ = true;  // true = top menu bar has focus
     int recipe_idx_ = 0;
     int cook_step_idx_ = 0;
     std::string focus_ingredient_;

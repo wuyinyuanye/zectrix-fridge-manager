@@ -205,15 +205,25 @@ void FridgeUi::DrawTopNav(FridgeTab active, const UiTopBar& bar) {
     canvas_.FillRect(0, 0, PixelCanvas::kWidth, 31, 15);
     canvas_.FillRect(0, 28, PixelCanvas::kWidth, 2, 0);
 
+    nav_focus_ = bar.nav_focus;
     int x = 4;
     for (int i = 0; i < static_cast<int>(FridgeTab::kCount); ++i) {
         const std::string t = kNames[i];
         const int tw = canvas_.MeasureText(t, 1);
         const int tab_w = tw + 16;
         if (i == static_cast<int>(active)) {
-            canvas_.FillRoundRectR(x, 2, tab_w, 24, 7, 0);
-            canvas_.FillRect(x, 16, tab_w, 12, 0);  // folder tab merges into the rule
-            canvas_.DrawText(x + 8, 6, t, 1, 15);
+            if (bar.nav_focus) {
+                // Menu has focus: solid black folder tab + pointer, page body is not selectable
+                canvas_.FillRoundRectR(x, 2, tab_w, 24, 7, 0);
+                canvas_.FillRect(x, 16, tab_w, 12, 0);
+                canvas_.DrawText(x + 8, 6, t, 1, 15);
+            } else {
+                // Inside the page: open (outlined) tab joined to the page body
+                canvas_.FillRoundRectR(x, 2, tab_w, 28, 7, 0);
+                canvas_.FillRoundRectR(x + 2, 4, tab_w - 4, 26, 5, 15);
+                canvas_.FillRect(x + 2, 26, tab_w - 4, 4, 15);
+                canvas_.DrawText(x + 8, 6, t, 1, 0);
+            }
         } else {
             canvas_.DrawText(x + 8, 6, t, 1, 0);
         }
@@ -223,20 +233,28 @@ void FridgeUi::DrawTopNav(FridgeTab active, const UiTopBar& bar) {
 }
 
 // Bottom legend with a gingham "tablecloth hem"
-void FridgeUi::DrawKeyLegend(const std::string& up_label,
-                             const std::string& ok_label,
-                             const std::string& down_label,
-                             const std::string& right_pill) {
+void FridgeUi::DrawKeyLegend(const std::string& nav_label, const std::string& ok_label) {
     canvas_.FillRect(0, kLegendY, PixelCanvas::kWidth, PixelCanvas::kHeight - kLegendY, 15);
     canvas_.FillPattern(0, kLegendY, PixelCanvas::kWidth, 6, UiFill::kGingham);
     canvas_.HLine(0, kLegendY + 6, PixelCanvas::kWidth, 0);
 
-    DrawKeyHints(6, 276, {{"上", up_label}, {"OK", ok_label}, {"下", down_label}});
-
-    if (!right_pill.empty()) {
-        const int pw = canvas_.MeasureText(right_pill, 1) + 12;
-        DrawChip(394 - pw, 276, right_pill, false);
+    if (nav_focus_) {
+        DrawKeyHints(6, 276, {{"上/下", "切换页面"}, {"OK", "进入本页"}});
+        const std::string hint = "按住OK说话";
+        canvas_.DrawText(394 - canvas_.MeasureText(hint, 1), 278, hint, 1, 0);
+        return;
     }
+    DrawKeyHints(6, 276, {{"上/下", nav_label}, {"OK", ok_label}});
+
+    // Way back to the menu, always in the same place (outlined = hold)
+    const std::string hold = "长按上";
+    const std::string act = "菜单";
+    const int kw = canvas_.MeasureText(hold, 1) + 10;
+    const int total = kw + 4 + canvas_.MeasureText(act, 1);
+    const int x = 394 - total;
+    canvas_.RoundRectR(x, 276, kw, 20, 5, 0, 1);
+    canvas_.DrawText(x + 5, 278, hold, 1, 0);
+    canvas_.DrawText(x + kw + 4, 278, act, 1, 0);
 }
 
 esp_err_t FridgeUi::UpdateTimerPillOnly(const UiTopBar& bar) {
@@ -270,7 +288,7 @@ esp_err_t FridgeUi::ShowBootSplash(const std::string& subtitle) {
     canvas_.RoundRectR(sx, 140, sw, 26, 13, 0, 1);
     canvas_.DrawText(sx + 12, 144, subtitle, 1, 0, sw - 20);
 
-    canvas_.DrawTextCentered(186, "上键切页 · 下键选择 · 按住OK说话", 1, 0);
+    canvas_.DrawTextCentered(186, "上下键选择 · OK进入 · 按住OK说话", 1, 0);
     canvas_.DottedHLine(120, 216, 160, 3, 0);
     canvas_.DrawTextCentered(228, "把每一样食材都好好吃掉~", 1, 0);
     canvas_.DrawTextCentered(256, "ZECTRIX NOTE4", 1, 0);
@@ -386,7 +404,7 @@ esp_err_t FridgeUi::RenderStandby4bpp(const std::string& date_str,
         canvas_.FillRoundRectR(254, 122, 130, 22, 11, 14);
         canvas_.DrawIcon16(UiIcon::kHeart, 259, 125, 4);
         canvas_.DrawText(279, 124, "匹配 " + std::to_string(top_recipe->match_pct) + "%", 1, 1, 100);
-        canvas_.DrawText(256, 148, "唤醒按上键看食谱", 1, 6, 130);
+        canvas_.DrawText(256, 148, "唤醒后进[食谱]看做法", 1, 6, 130);
     } else {
         canvas_.DrawText(258, 108, "暂无食谱", 1, 6);
     }
@@ -460,13 +478,14 @@ esp_err_t FridgeUi::RenderFridgePage(const UiTopBar& bar,
         canvas_.RoundRectR(46, 172, 308, 34, 17, 0, 1);
         canvas_.DrawIcon16(UiIcon::kMic, 60, 181, 0);
         canvas_.DrawText(82, 180, "按住 OK 说“放两盒牛奶”试试", 1, 0, 262);
-        DrawKeyLegend("切页", "按住说", "刷新");
+        DrawKeyLegend("刷新", "按住说");
         return Flush1bpp(force_full);
     }
 
     const int32_t today = FridgeStore::TodayDayNumber();
     constexpr int kPerPage = 8;
     const int n = static_cast<int>(items.size());
+    const bool has_sel = selected_idx >= 0;
     const int clamped = std::clamp(selected_idx, 0, n - 1);
     const int page = clamped / kPerPage;
     const int total_pages = (n + kPerPage - 1) / kPerPage;
@@ -482,7 +501,7 @@ esp_err_t FridgeUi::RenderFridgePage(const UiTopBar& bar,
         const int local = i - start;
         const int cx = kColX[local % 2];
         const int cy = 56 + (local / 2) * 52;
-        const bool sel = (i == clamped);
+        const bool sel = has_sel && (i == clamped);
 
         if (sel) {
             canvas_.FillRoundRectR(cx + 3, cy + 3, kCardW, kCardH, 8, 0);
@@ -528,10 +547,11 @@ esp_err_t FridgeUi::RenderFridgePage(const UiTopBar& bar,
         canvas_.FillRoundRectR(391, thumb_y, 3, thumb_h, 1, 0);
     }
 
-    const std::string pill = total_pages > 1
-                                 ? (std::to_string(page + 1) + "/" + std::to_string(total_pages) + "页")
-                                 : "";
-    DrawKeyLegend("切页", "操作/按住说", "选菜", pill);
+    if (total_pages > 1) {
+        const std::string pill = std::to_string(page + 1) + "/" + std::to_string(total_pages) + "页";
+        DrawChip(386 - canvas_.MeasureText(pill, 1) - 12, 33, pill, false);
+    }
+    DrawKeyLegend("选菜", "操作/按住说");
     return Flush1bpp(force_full);
 }
 
@@ -581,7 +601,7 @@ esp_err_t FridgeUi::RenderRecipePage(const UiTopBar& bar,
         canvas_.RoundRectR(46, 172, 308, 34, 17, 0, 1);
         canvas_.DrawIcon16(UiIcon::kMic, 60, 181, 0);
         canvas_.DrawText(82, 180, "按住 OK 说“推荐一道快手菜”", 1, 0, 262);
-        DrawKeyLegend("切页", "按住说", "刷新");
+        DrawKeyLegend("刷新", "按住说");
         return Flush1bpp(force_full);
     }
 
@@ -596,9 +616,12 @@ esp_err_t FridgeUi::RenderRecipePage(const UiTopBar& bar,
     canvas_.DrawIcon16(UiIcon::kHeart, 394 - mw, 43, 15);
     canvas_.DrawText(388 - mw + 24, 42, match_s, 1, 15);
 
+    const std::string counter = std::to_string(r_i + 1) + "/" + std::to_string(recipes.size()) + "道";
+    const int cw = canvas_.MeasureText(counter, 1);
     canvas_.DrawClockIcon(13, 74, 0);
     canvas_.DrawText(27, 70, std::to_string(mv.recipe.time_min) + "分钟 · " + mv.recipe.summary,
-                     1, 0, 362);
+                     1, 0, 388 - cw - 12 - 27);
+    canvas_.DrawText(388 - cw, 70, counter, 1, 0);
 
     // Section tag + dotted rule
     canvas_.RoundRectR(10, 96, 98, 22, 11, 0, 1);
@@ -647,8 +670,7 @@ esp_err_t FridgeUi::RenderRecipePage(const UiTopBar& bar,
         DrawButton(bx[i], 212, bw[i], 42, btns[i], icons[i], true, i == btn_idx);
     }
 
-    DrawKeyLegend("切页", "确认/按住说", "换按钮",
-                  std::to_string(r_i + 1) + "/" + std::to_string(recipes.size()) + "道");
+    DrawKeyLegend("换按钮", "确认/按住说");
     return Flush1bpp(force_full);
 }
 
@@ -715,12 +737,25 @@ esp_err_t FridgeUi::RenderCookPage(const UiTopBar& bar,
         }
     } else {
         canvas_.DrawMascotPixel(170, 52, 3, false);
-        canvas_.DrawTextCentered(126, "先按上键去“食谱”选一道菜吧~", 1, 0);
+        canvas_.DrawTextCentered(126, "先回菜单去[食谱]选一道菜吧~", 1, 0);
+    }
+
+    // A step timer started from this page is labelled with the recipe title
+    bool recipe_timer_running = false;
+    if (has_recipe) {
+        for (const auto& t : timers) {
+            if (t.active && t.label == recipe->recipe.title) recipe_timer_running = true;
+        }
     }
 
     std::string btn_text;
     UiIcon btn_icon = UiIcon::kClock;
-    if (is_last_step && has_recipe) {
+    if (recipe_timer_running && !is_last_step) {
+        // No number here on purpose: the live countdown is the top-right pill (partial refresh),
+        // a number on this button would freeze between full refreshes.
+        btn_text = "计时中，看右上角 · 按OK停止";
+        btn_icon = UiIcon::kBell;
+    } else if (is_last_step && has_recipe) {
         btn_text = "做好啦! 自动扣减冰箱库存";
         btn_icon = UiIcon::kCheck;
     } else if (step_timer_min > 0) {
@@ -728,9 +763,21 @@ esp_err_t FridgeUi::RenderCookPage(const UiTopBar& bar,
     } else {
         btn_text = "启动快捷计时 (5 分钟)";
     }
-    DrawButton(14, 212, 372, 44, btn_text, btn_icon, true, true);
+    if (recipe_timer_running && !is_last_step) {
+        // "Running" look: dotted fill + thick border, distinct from the solid "start" button
+        canvas_.FillPatternRoundRectR(14, 212, 372, 44, 10, UiFill::kDots25);
+        canvas_.RoundRectR(14, 212, 372, 44, 10, 0, bar.nav_focus ? 1 : 3);
+        const int tw = canvas_.MeasureText(btn_text, 1) + 22;
+        const int tx = 14 + (372 - tw) / 2;
+        canvas_.FillRoundRectR(tx - 8, 223, tw + 16, 22, 11, 15);
+        canvas_.DrawIcon16(btn_icon, tx, 226, 0);
+        canvas_.DrawText(tx + 22, 225, btn_text, 1, 0);
+    } else {
+        DrawButton(14, 212, 372, 44, btn_text, btn_icon, true, !bar.nav_focus);
+    }
 
-    DrawKeyLegend("切页", is_last_step ? "完工/按住说" : "计时/按住说", "下一步");
+    DrawKeyLegend("翻步骤", is_last_step ? "完工/按住说"
+                                     : (recipe_timer_running ? "停止计时/按住说" : "计时/按住说"));
     return Flush1bpp(force_full);
 }
 
@@ -786,12 +833,13 @@ esp_err_t FridgeUi::RenderShoppingPage(const UiTopBar& bar,
         canvas_.RoundRectR(46, 172, 308, 34, 17, 0, 1);
         canvas_.DrawIcon16(UiIcon::kMic, 60, 181, 0);
         canvas_.DrawText(82, 180, "按住 OK 说“买牛奶”就能添加", 1, 0, 262);
-        DrawKeyLegend("切页", "按住说", "刷新");
+        DrawKeyLegend("刷新", "按住说");
         return Flush1bpp(force_full);
     }
 
     const int n = static_cast<int>(list.size());
     const int total_sel = n + 1;
+    const bool has_sel = selected_idx >= 0;
     const int clamped = std::clamp(selected_idx, 0, total_sel - 1);
 
     constexpr int kMaxVis = 4;
@@ -807,7 +855,7 @@ esp_err_t FridgeUi::RenderShoppingPage(const UiTopBar& bar,
     for (int i = vis_start; i < vis_end; ++i) {
         const auto& s = list[i];
         const int ry = 58 + (i - vis_start) * kRowH;
-        const bool sel = (i == clamped);
+        const bool sel = has_sel && (i == clamped);
         const uint8_t fg = sel ? 15 : 0;
 
         if (sel) {
@@ -837,11 +885,11 @@ esp_err_t FridgeUi::RenderShoppingPage(const UiTopBar& bar,
         for (int i = 0; i < 5; ++i) canvas_.HLine(380 + i, 198 + i, 9 - 2 * i, 0);  // more below
     }
 
-    const bool sel_commit = (clamped == n);
+    const bool sel_commit = has_sel && (clamped == n);
     DrawButton(8, 212, 384, 44, "已勾选 (" + std::to_string(checked) + ") 一键放进冰箱",
                UiIcon::kFridge, true, sel_commit);
 
-    DrawKeyLegend("切页", sel_commit ? "入库/按住说" : "勾选/按住说", "下一项");
+    DrawKeyLegend("选择", sel_commit ? "入库/按住说" : "勾选/按住说");
     return Flush1bpp(force_full);
 }
 
@@ -903,10 +951,11 @@ esp_err_t FridgeUi::RenderSettingsPage(const UiTopBar& bar,
     const UiIcon icons[4] = {UiIcon::kMic, UiIcon::kWifi, UiIcon::kMoon, UiIcon::kPower};
     const int clamped = std::clamp(selected_idx, 0, 3);
     for (int i = 0; i < 4; ++i) {
-        DrawButton(166, 110 + i * 38, 226, 32, ctrls[i], icons[i], true, i == clamped);
+        DrawButton(166, 110 + i * 38, 226, 32, ctrls[i], icons[i], true,
+                   selected_idx >= 0 && i == clamped);
     }
 
-    DrawKeyLegend("切页", "执行/按住说", "下一项");
+    DrawKeyLegend("选择", "执行/按住说");
     return Flush1bpp(force_full);
 }
 

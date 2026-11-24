@@ -26,6 +26,7 @@ struct UiTopBar {
     int battery_pct = 100;
     bool charging = false;
     std::string active_timer_label;  // e.g. "剩2分" or "00:40"
+    bool nav_focus = false;  // true = top menu bar has focus (UP/DOWN pick page, OK enters)
 };
 
 class FridgeUi {
@@ -132,11 +133,8 @@ private:
                     UiIcon icon, bool has_icon, bool selected);
     // Small rounded status chip; returns its width
     int DrawChip(int x, int y, const std::string& text, bool solid);
-    // Unified 3-key physical button legend at bottom of every page!
-    void DrawKeyLegend(const std::string& up_label,
-                       const std::string& ok_label,
-                       const std::string& down_label,
-                       const std::string& right_pill = "");
+    // Bottom legend: [上/下] <nav_label>  [OK] <ok_label>  [长按上] 切页
+    void DrawKeyLegend(const std::string& nav_label, const std::string& ok_label);
     esp_err_t Flush1bpp(bool force_full);
     esp_err_t FlushRect1bpp(const zectrix_epd_rect_t& rect, bool count_for_full = true);
 
@@ -145,6 +143,7 @@ private:
     bool has_1bpp_base_ = false;
     int partial_count_ = 0;
     int pill_partial_count_ = 0;
+    bool nav_focus_ = false;  // latched by DrawTopNav for the legend of the same frame
 };
 
 #endif  // ZECTRIX_FRIDGE_UI_H_

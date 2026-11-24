@@ -54,6 +54,10 @@ int main(int argc, char** argv) {
                                recipes.empty() ? nullptr : &recipes[0], shopping, 8), "standby");
     Shot("01_standby_4bpp");
 
+    UiTopBar bar_menu = bar;
+    bar_menu.nav_focus = true;
+    Check(ui.RenderFridgePage(bar_menu, all, fr, fz, items, -1, true), "fridge menu"); Shot("02a_fridge_menu_focus");
+    Check(ui.RenderRecipePage(bar_menu, recipes, 0, -1, true), "recipe menu"); Shot("02b_recipe_menu_focus");
     Check(ui.RenderFridgePage(bar, all, fr, fz, items, 1, true), "fridge"); Shot("02_fridge");
     Check(ui.RenderFridgePage(bar_timer, all, fr, fz, items, 9, true), "fridge p2"); Shot("03_fridge_page2_timer");
     Check(ui.RenderItemPopup(items[0], 0, true), "item popup"); Shot("04_item_popup");
@@ -64,6 +68,11 @@ int main(int argc, char** argv) {
 
     const RecipeMatchView* r0 = recipes.empty() ? nullptr : &recipes[0];
     Check(ui.RenderCookPage(bar_timer, r0, 1, timers, true), "cook"); Shot("08_cook");
+    if (r0) {
+        std::vector<KitchenTimer> step_timers = timers;
+        step_timers.push_back({999, r0->recipe.title, 120, 0, true, false});
+        Check(ui.RenderCookPage(bar_timer, r0, 1, step_timers, true), "cook running"); Shot("08b_cook_timer_running");
+    }
     if (r0) {
         Check(ui.RenderCookPage(bar, r0, static_cast<int>(r0->recipe.steps.size()) - 1, {}, true), "cook last");
         Shot("09_cook_last");

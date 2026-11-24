@@ -23,6 +23,7 @@ constexpr TickType_t kButtonDebounce = pdMS_TO_TICKS(55);
 constexpr TickType_t kButtonCooldown = pdMS_TO_TICKS(80);
 constexpr TickType_t kOkLongPress = pdMS_TO_TICKS(350);   // Fast PTT hold trigger
 constexpr TickType_t kDownLongPress = pdMS_TO_TICKS(3000);
+constexpr TickType_t kUpLongPress = pdMS_TO_TICKS(600);    // Hold UP = switch page
 constexpr adc_channel_t kBatteryAdcChannel = ADC_CHANNEL_3;
 
 struct ButtonDefinition {
@@ -43,12 +44,17 @@ TickType_t LongPressTicks(ZectrixButton button) {
     if (button == ZectrixButton::kOk) {
         return kOkLongPress;
     }
+    if (button == ZectrixButton::kUp) {
+        return kUpLongPress;
+    }
     return portMAX_DELAY;
 }
 
 bool ClickOnPress(ZectrixButton button) {
-    // Only UP triggers on press; DOWN and OK have long-press actions so they trigger click on release!
-    return button == ZectrixButton::kUp;
+    // Every key now has a long-press action, so clicks fire on release (a hold never
+    // also produces a click).
+    (void)button;
+    return false;
 }
 
 }  // namespace
