@@ -7,3 +7,11 @@
 .DS_Store
 __pycache__/
 *.py[cod]
+
+# ---- Private / local-only (never publish) ----
+/backups/
+main/local_secrets.h
+HANDOFF.md
+# Fonts extracted from the vendor 3.7.5 firmware: licence unclear, generate locally
+# with tools/extract_official_375_fonts.py (see README_FRIDGE.md)
+main/assets/official_font_*.bin

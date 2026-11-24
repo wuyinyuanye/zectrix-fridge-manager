@@ -48,6 +48,7 @@ public:
     esp_err_t Init();
     bool WaitButton(ZectrixButtonEvent* event, TickType_t timeout);
     void DrainButtons();
+    bool IsButtonPressed(ZectrixButton button) const;
 
     RtcPcf8563* rtc() const { return rtc_.get(); }
     ZectrixNfc* nfc() const { return nfc_.get(); }
@@ -65,7 +66,9 @@ private:
         int sampled_level = 1;
         TickType_t sampled_at = 0;
         TickType_t pressed_at = 0;
+        TickType_t released_at = 0;
         bool armed = false;
+        bool press_valid = false;
         bool long_sent = false;
     };
 

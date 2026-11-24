@@ -54,6 +54,9 @@ bool RtcPcf8563::Init(gpio_num_t int_gpio) {
         }
     }
 
+    // Capture pre-existing alarm flag BEFORE clearing so deep-sleep morning
+    // RTC wakeups are reliably detected by the application!
+    alarm_fired_on_boot_ = IsAlarmFired();
     return ClearAlarmFlag();
 }
 

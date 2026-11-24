@@ -15,6 +15,7 @@ public:
     RtcPcf8563(i2c_master_bus_handle_t i2c_bus, uint8_t addr);
 
     bool Init(gpio_num_t int_gpio);
+    bool WasAlarmFiredOnBoot() const { return alarm_fired_on_boot_; }
     bool SetTime(const tm& local_tm);
     bool GetTime(tm& out_local_tm);
 
@@ -40,6 +41,7 @@ private:
     gpio_num_t int_gpio_ = GPIO_NUM_NC;
     std::function<void()> callback_;
     std::atomic<bool> interrupt_pending_{false};
+    bool alarm_fired_on_boot_ = false;
 };
 
 #endif // ZECTRIX_RTC_PCF8563_H

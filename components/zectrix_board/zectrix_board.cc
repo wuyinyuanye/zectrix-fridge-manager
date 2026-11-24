@@ -19,8 +19,9 @@ namespace {
 
 constexpr char kTag[] = "zectrix_board";
 constexpr TickType_t kButtonPoll = pdMS_TO_TICKS(20);
-constexpr TickType_t kButtonDebounce = pdMS_TO_TICKS(40);
-constexpr TickType_t kOkLongPress = pdMS_TO_TICKS(1500);
+constexpr TickType_t kButtonDebounce = pdMS_TO_TICKS(55);
+constexpr TickType_t kButtonCooldown = pdMS_TO_TICKS(80);
+constexpr TickType_t kOkLongPress = pdMS_TO_TICKS(350);   // Fast PTT hold trigger
 constexpr TickType_t kDownLongPress = pdMS_TO_TICKS(3000);
 constexpr adc_channel_t kBatteryAdcChannel = ADC_CHANNEL_3;
 
@@ -46,8 +47,8 @@ TickType_t LongPressTicks(ZectrixButton button) {
 }
 
 bool ClickOnPress(ZectrixButton button) {
-    return button == ZectrixButton::kUp ||
-           button == ZectrixButton::kDown;
+    // Only UP triggers on press; DOWN and OK have long-press actions so they trigger click on release!
+    return button == ZectrixButton::kUp;
 }
 
 }  // namespace
@@ -238,7 +239,9 @@ void ZectrixBoard::ButtonTask() {
                 now - state.sampled_at >= kButtonDebounce) {
                 state.stable_level = sampled;
                 if (sampled == 0) {
-                    if (state.armed) {
+                    state.press_valid = state.armed &&
+                        (state.released_at == 0 || (now - state.released_at >= kButtonCooldown));
+                    if (state.press_valid) {
                         state.pressed_at = now;
                         state.long_sent = false;
                         if (ClickOnPress(definition.button)) {
@@ -248,17 +251,21 @@ void ZectrixBoard::ButtonTask() {
                             xQueueSend(button_queue_, &event, 0);
                         }
                     }
-                } else if (!state.armed) {
-                    state.armed = true;
-                } else if (!state.long_sent &&
-                           !ClickOnPress(definition.button)) {
-                    const ZectrixButtonEvent event = {
-                        definition.button, ZectrixButtonAction::kClick};
-                    xQueueSend(button_queue_, &event, 0);
+                } else {
+                    state.released_at = now;
+                    if (!state.armed) {
+                        state.armed = true;
+                    } else if (state.press_valid && !state.long_sent &&
+                               !ClickOnPress(definition.button)) {
+                        const ZectrixButtonEvent event = {
+                            definition.button, ZectrixButtonAction::kClick};
+                        xQueueSend(button_queue_, &event, 0);
+                    }
+                    state.press_valid = false;
                 }
             }
 
-            if (state.armed && state.stable_level == 0 &&
+            if (state.press_valid && state.stable_level == 0 &&
                 !state.long_sent) {
                 const TickType_t threshold = LongPressTicks(definition.button);
                 if (threshold != portMAX_DELAY &&
@@ -287,6 +294,15 @@ void ZectrixBoard::DrainButtons() {
     ZectrixButtonEvent event;
     while (xQueueReceive(button_queue_, &event, 0) == pdTRUE) {
     }
+}
+
+bool ZectrixBoard::IsButtonPressed(ZectrixButton button) const {
+    for (const auto& def : kButtons) {
+        if (def.button == button) {
+            return gpio_get_level(def.gpio) == 0;
+        }
+    }
+    return false;
 }
 
 AudioCodec* ZectrixBoard::PrepareAudio() {
