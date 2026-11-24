@@ -49,6 +49,7 @@ private:
     static esp_err_t HandleItems(httpd_req_t* req);
     static esp_err_t HandleShopping(httpd_req_t* req);
     static esp_err_t HandleTimers(httpd_req_t* req);
+    static esp_err_t HandleRecipes(httpd_req_t* req);
     static esp_err_t HandleConfig(httpd_req_t* req);
     static esp_err_t HandleAiText(httpd_req_t* req);
     static esp_err_t HandleAiTest(httpd_req_t* req);

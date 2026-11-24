@@ -2,6 +2,7 @@
 #include <atomic>
 #include <cstdio>
 #include <ctime>
+#include <functional>
 #include <string>
 #include <vector>
 
@@ -113,6 +114,8 @@ public:
             ui_.ShowBootSplash("正在启动极趣小冰箱...");
         }
 
+        xiaozhi_.SetAudio(&audio_);  // play Xiaozhi's spoken replies
+
         wifi_web_.Start([this](bool switch_recipe, bool switch_cook) {
             if (switch_recipe) pending_tab_.store(static_cast<int>(FridgeTab::kRecipe));
             else if (switch_cook) pending_tab_.store(static_cast<int>(FridgeTab::kCook));
@@ -132,6 +135,7 @@ public:
             EnterDeepSleepStandby(true);
         }
 
+        reminder_check_pending_ = true;  // woken by the user (RTC refresh exited above)
         tab_ = store_.GetConfig().wifi_ssid.empty() ? FridgeTab::kSettings : FridgeTab::kFridge;
         nav_focus_ = (tab_ != FridgeTab::kSettings);  // start on the top menu bar
         selected_ = 0;
@@ -181,9 +185,21 @@ public:
                 alarm_shown_ = true;
                 last_activity_ms_ = now;
                 board_.SetPowerLed(true);
-                ui_.ShowAlarmScreen(store_.GetTimers());
+                const auto ring_timers = store_.GetTimers();
+                ui_.ShowAlarmScreen(ring_timers);
                 audio_.PlayAlarmBeep();
                 last_alarm_beep_ms = now;
+                if (newly_ringing && wifi_web_.is_wifi_connected()) {
+                    std::string label;
+                    for (const auto& t : ring_timers) {
+                        if (t.ringing) { label = t.label; break; }
+                    }
+                    if (label.empty() || label == "厨房计时" || label == "语音计时") {
+                        label = "厨房";
+                    }
+                    // Falls back silently to the beeps if Xiaozhi is busy or offline
+                    xiaozhi_.AnnounceAsync(store_.GetConfig(), label + "的计时时间到啦");
+                }
             } else if (any_ringing && now - last_alarm_beep_ms >= 2200) {
                 board_.SetPowerLed((now / 500) % 2 == 0);
                 audio_.PlayAlarmBeep();
@@ -257,9 +273,20 @@ public:
                 EnterDeepSleepStandby();
             }
 
+            if (reminder_check_pending_ && !any_ringing) {
+                MaybeAnnounceMorningReminder();
+            }
+
             ZectrixButtonEvent ev;
             if (!board_.WaitButton(&ev, pdMS_TO_TICKS(100))) continue;
             last_activity_ms_ = NowMs();
+            reminder_check_pending_ = true;  // a key press also counts as waking the device
+
+            // Any key stops a spoken reply / announcement that is still playing
+            if (audio_.IsTtsActive() || xiaozhi_.is_announcing()) {
+                xiaozhi_.CancelAnnounce();
+                audio_.TtsStop();
+            }
             ESP_LOGI(kTag, "Button event: btn=%d act=%d (tab=%d sel=%d)",
                      static_cast<int>(ev.button), static_cast<int>(ev.action),
                      static_cast<int>(tab_), selected_);
@@ -331,7 +358,8 @@ private:
     // ticking kitchen timers and ringing alarms on time (never blocked up to 36s!).
     template <typename Fn>
     auto RunWithTimerTicking(const char* task_name, uint32_t stack_bytes,
-                             bool allow_silence_click, Fn&& fn) -> decltype(fn()) {
+                             bool allow_silence_click, Fn&& fn,
+                             const std::function<void()>& on_tick = nullptr) -> decltype(fn()) {
         using Ret = decltype(fn());
         struct WorkerCtx {
             Fn* fn;
@@ -366,6 +394,7 @@ private:
                     alarm_shown_ = false;
                 }
             }
+            if (on_tick) on_tick();
             vTaskDelay(pdMS_TO_TICKS(100));
         }
         return std::move(ctx.result);
@@ -457,6 +486,42 @@ private:
     //   MENU (top tab bar): UP/DOWN pick a page (wrapping), OK enters that page.
     //   PAGE: DOWN moves down (wrapping); UP moves up and, from the first item, returns
     //         to the MENU. Holding UP returns to the MENU from anywhere.
+    // Morning storage reminder ("X已经放了N天啦", USDA storage chart, each item once): spoken once a day, on the first time the user wakes / uses
+    // the device between 06:00 and 12:00 (the automatic morning screen refresh stays silent).
+    void MaybeAnnounceMorningReminder() {
+        if (!FridgeStore::IsClockSynced()) return;      // need the real date & hour
+        if (!wifi_web_.is_wifi_connected()) return;     // keep pending until Wi-Fi is up
+        if (xiaozhi_.is_announcing() || xiaozhi_.is_ptt_active()) return;
+        reminder_check_pending_ = false;
+
+        const time_t now = std::time(nullptr);
+        struct tm lt = {};
+        localtime_r(&now, &lt);
+        if (lt.tm_hour < 6 || lt.tm_hour >= 12) return;
+
+        const int32_t today = FridgeStore::TodayDayNumber();
+        if (today <= 0 || store_.GetLastReminderDay() == today) return;
+        if (reminder_attempts_day_ != today) {
+            reminder_attempts_day_ = today;
+            reminder_attempts_ = 0;
+        }
+        if (reminder_attempts_ >= 3) return;  // don't keep retrying a failing network all morning
+
+        std::vector<uint32_t> ids;
+        const std::string notice = store_.BuildStorageReminderText(&ids);
+        if (notice.empty()) {
+            store_.SetLastReminderDay(today);  // nothing to mention: today's first wake is done
+            return;
+        }
+        reminder_attempts_++;
+        ESP_LOGI(kTag, "morning reminder: %s", notice.c_str());
+        xiaozhi_.AnnounceAsync(store_.GetConfig(), notice, [this, today, ids](bool spoken) {
+            if (!spoken) return;  // retried on a later wake this morning
+            store_.SetLastReminderDay(today);
+            store_.MarkStorageReminded(ids);  // each item is mentioned only once
+        });
+    }
+
     void EnterNavFocus() {
         nav_focus_ = true;
         selected_ = 0;
@@ -694,10 +759,14 @@ private:
                     }
                     ui_.RenderLoadingPopup(
                         "正在定制食谱...",
-                        "正用“" + item.name + "”搭配冰箱现有库存生成家常菜，请稍候...");
+                        "正在为“" + item.name + "”挑一道地道的家常菜，请稍候...");
                     const std::string prompt =
-                        "请以冰箱里的" + item.name +
-                        "为主料，搭配冰箱现有食材定制一道3到4步的家常菜谱（每步22字以内），必须调用fridge_set_recipe工具推送菜谱。";
+                        "请推荐一道以" + item.name + "为主料的经典中式家常菜。"
+                        "要求：必须是大家熟知、真实存在的传统菜，菜名和做法按传统做法，"
+                        "例如排骨可以做红烧排骨、糖醋排骨、豉汁蒸排骨。"
+                        "不要为了用掉冰箱里的食材而把不相干的食材硬凑进同一道菜，"
+                        "不要自创菜名；配料按这道菜的正宗做法列，冰箱里没有的照样列出。"
+                        "写3到4步，每步22字以内，然后调用fridge_set_recipe工具推送。";
                     const AppConfig cfg = store_.GetConfig();
                     const XiaozhiVoiceResult r = RunWithTimerTicking(
                         "dev_recipe", 16384, true, [&]() {
@@ -851,8 +920,9 @@ private:
 
     // Returns true if user pressed UP to undo!
     bool ShowBriefPopup(bool ok, const std::string& heard,
-                        const std::string& detail, bool can_undo) {
-        ui_.RenderVoiceResultPopup(ok, heard, detail, can_undo);
+                        const std::string& detail, bool can_undo,
+                        bool already_rendered = false) {
+        if (!already_rendered) ui_.RenderVoiceResultPopup(ok, heard, detail, can_undo);
         const int timeout_ms = ok ? 5000 : 12000;
         ZectrixButtonEvent ev;
         while (board_.WaitButton(&ev, pdMS_TO_TICKS(timeout_ms))) {
@@ -926,6 +996,11 @@ private:
             return;
         }
 
+        // A notice may still be connecting/speaking: cancel it so the mic and service are free
+        xiaozhi_.CancelAnnounce();
+        for (int i = 0; i < 40 && xiaozhi_.is_announcing(); ++i) vTaskDelay(pdMS_TO_TICKS(50));
+        audio_.TtsStop();
+
         XiaozhiOtaInfo ota;
         const bool ptt_begun = RunWithTimerTicking("ptt_open", 16384, false, [&]() {
             return xiaozhi_.BeginPttSession(cfg, &ota);
@@ -964,9 +1039,22 @@ private:
         }
 
         // Opus encoding uses alloca heavily: give the worker the same 32KB stack as the main task
-        const XiaozhiVoiceResult r = RunWithTimerTicking("ptt_fin", 32768, true, [&]() {
-            return xiaozhi_.FinishPttWithWav(wav, focus_ingredient_);
-        });
+        // Show the result as soon as Xiaozhi has acted, while its spoken reply keeps playing
+        std::string early_heard, early_text;
+        bool early_undo = false;
+        bool early_shown = false;
+        const XiaozhiVoiceResult r = RunWithTimerTicking(
+            "ptt_fin", 32768, true,
+            [&]() { return xiaozhi_.FinishPttWithWav(wav, focus_ingredient_); },
+            [&]() {
+                if (early_shown) return;
+                bool changed = false;
+                if (!xiaozhi_.PeekTurnPreview(&early_heard, &early_text, &changed)) return;
+                early_undo = changed && store_.HasUndoSnapshot();
+                ui_.RenderVoiceResultPopup(true, early_heard.empty() ? "语音指令" : early_heard,
+                                           early_text, early_undo);
+                early_shown = true;
+            });
         wav.clear();
         wav.shrink_to_fit();
         board_.SetPowerLed(false);
@@ -1006,9 +1094,12 @@ private:
             nav_focus_ = false;
         }
 
-        const bool want_undo = ShowBriefPopup(true,
-                                              r.heard.empty() ? "语音指令" : r.heard,
-                                              r.reply, r.data_changed && store_.HasUndoSnapshot());
+        const std::string final_heard = r.heard.empty() ? "语音指令" : r.heard;
+        const bool final_undo = r.data_changed && store_.HasUndoSnapshot();
+        const bool same_as_early = early_shown && early_text == r.reply && early_undo == final_undo &&
+                                   (early_heard.empty() ? "语音指令" : early_heard) == final_heard;
+        const bool want_undo = ShowBriefPopup(true, final_heard, r.reply, final_undo,
+                                              /*already_rendered=*/same_as_early);
         if (want_undo && store_.UndoLastVoiceAction()) {
             audio_.PlayChimeStop();
         }
@@ -1126,6 +1217,9 @@ private:
     FridgeTab tab_ = FridgeTab::kFridge;
     int selected_ = 0;
     bool nav_focus_ = true;  // true = top menu bar has focus
+    bool reminder_check_pending_ = false;
+    int32_t reminder_attempts_day_ = 0;
+    int reminder_attempts_ = 0;
     int recipe_idx_ = 0;
     int cook_step_idx_ = 0;
     std::string focus_ingredient_;

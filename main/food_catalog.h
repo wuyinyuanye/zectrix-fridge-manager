@@ -15,7 +15,7 @@ enum class FoodIcon : uint8_t {
 
 struct FoodHint {
     std::string zone = "冷藏";
-    int days = 5;
+    int days = 5;  // suggested storage days (a guideline, not an expiry); 0 = unknown
     FoodIcon icon = FoodIcon::kLeaf;
     std::string tip;
 };
@@ -51,6 +51,11 @@ inline FoodIcon GuessIcon(const std::string& name, const std::string& zone) {
 // Built-in Chinese kitchen food knowledge base (100+ common items)
 inline FoodHint Lookup(const std::string& name) {
     FoodHint h;
+    // Explicitly frozen goods ("冻虾", "速冻虎虾", "冻鸡腿"), but not 果冻 (jelly)
+    if (name.find("冻") != std::string::npos && name.find("果冻") == std::string::npos) {
+        h.zone = "冷冻"; h.days = 30; h.icon = GuessIcon(name, "冷冻");
+        return h;
+    }
     // Frozen items
     if (ContainsAny(name, {"水饺", "饺子", "汤圆", "馄饨", "包子", "馒头", "冰淇淋", "雪糕", "速冻", "冻肉", "牛排", "肥牛", "羊肉卷", "丸子", "排骨"})) {
         h.zone = "冷冻"; h.days = 30; h.icon = FoodIcon::kSnow;
@@ -135,7 +140,83 @@ inline FoodHint Lookup(const std::string& name) {
         return h;
     }
     h.icon = GuessIcon(name, h.zone);
+    h.days = 0;  // unknown food: no suggested storage days
     return h;
+}
+
+// ============================================================================
+// Recommended home storage times, used ONLY for the "X已经放了N天啦" reminder.
+// Source: USDA FSIS / FoodSafety.gov "Cold Food Storage Chart" and the USDA FoodKeeper
+// data (refrigerator <= 4C / 40F, freezer -18C / 0F). Where the source gives a range
+// we use the LOWER end. Freezer times are for QUALITY only (frozen food stays safe).
+// 0 = the source gives no figure (or says "do not freeze"): no reminder.
+// Items checked in order: more specific names first ("鸡蛋" before "鸡", "牛奶" before "牛").
+// ============================================================================
+struct StorageGuide {
+    int fridge_days = 0;
+    int freezer_days = 0;
+};
+
+inline StorageGuide LookupStorageGuide(const std::string& name) {
+    struct Rule {
+        std::initializer_list<const char*> keys;
+        int fridge_days;
+        int freezer_days;
+    };
+    static const Rule kRules[] = {
+        // Not covered by the source (look like covered foods by name)
+        {{"牛油果", "鱼丸", "鱼豆腐", "蟹棒", "肉松", "牛肉干", "牛轧", "鸡精", "果冻",
+          "皮蛋", "咸蛋", "咸鸭蛋", "蛋糕", "蛋挞", "汤圆", "水饺", "饺子", "馄饨", "包子",
+          "腊肉", "腊肠", "卤", "猪肝", "鸡肝", "腰花", "肚", "淡奶油"}, 0, 0},
+        // Eggs: raw in shell 3-5 weeks, do not freeze; hard-boiled 1 week
+        {{"水煮蛋", "卤蛋", "茶叶蛋", "煮鸡蛋"}, 7, 0},
+        {{"蛋"}, 21, 0},
+        // Dairy: yogurt 1-2 wk / 1-2 mo; milk = package date / 3 mo; butter 1-2 mo / 6-9 mo;
+        // cheese soft 1-2 wk, hard opened 3-4 wk / 6 mo
+        {{"酸奶"}, 7, 30},
+        {{"牛奶", "鲜奶", "纯奶", "巴氏奶"}, 0, 90},
+        {{"黄油"}, 30, 180},
+        {{"奶酪", "芝士"}, 7, 180},
+        // Processed meat: bacon 1 wk / 1 mo; cooked sausage & hot dogs 1 wk / 1-2 mo;
+        // ham & luncheon meat (opened) 3-5 days / 1-2 mo
+        {{"培根"}, 7, 30},
+        {{"香肠", "热狗"}, 7, 30},
+        {{"火腿", "午餐肉"}, 3, 30},
+        // Ground meat 1-2 days / 3-4 months
+        {{"肉馅", "肉末", "绞肉"}, 1, 90},
+        // Raw poultry: whole 1-2 days / 1 year; pieces 1-2 days / 9 months
+        {{"整鸡", "整只鸡"}, 1, 365},
+        {{"鸡", "鸭", "鹅"}, 1, 270},
+        // Shrimp, crayfish, scallops 1-3 days / 6-18 months
+        {{"虾", "扇贝"}, 1, 180},
+        // Fatty fish 1-2 days / 2-3 months; lean fish 1-2 days / 6-8 months
+        {{"三文鱼", "鲑鱼", "金枪鱼", "鲭鱼", "青花鱼", "秋刀鱼"}, 1, 60},
+        {{"鱼"}, 1, 180},
+        // Fresh beef, pork, lamb steaks/chops/roasts 3-5 days / 4-12 months
+        {{"排骨", "五花肉", "里脊", "牛排", "肥牛", "羊肉卷", "猪", "牛", "羊"}, 3, 120},
+        // Leftovers & soups 3-4 days; frozen 1-2 months (no-meat) .. 2-6 months (meat)
+        {{"剩菜", "剩饭", "米饭", "汤", "炖", "红烧", "炒"}, 3, 30},
+        // Tofu 1 week / 5 months
+        {{"豆腐"}, 7, 150},
+        // Mushrooms 3-7 days / 10-12 months
+        {{"蘑菇", "香菇", "平菇", "金针菇", "杏鲍菇", "口蘑", "菌"}, 3, 300},
+        // Leafy greens 3-7 days, not recommended for freezing
+        {{"菠菜", "生菜", "油麦菜", "小白菜", "青菜", "上海青", "空心菜", "茼蒿", "菜心"}, 3, 0},
+        // Broccoli 3-5 days / 10-12 months; cucumber 4-6 days / no; carrots 2-3 weeks / 10-12 months
+        {{"西兰花"}, 3, 300},
+        {{"黄瓜"}, 4, 0},
+        {{"胡萝卜"}, 14, 300},
+        // Fruit: strawberries 2-3 days / 8-12 mo; blueberries 1-2 wk / 8-12 mo;
+        // grapes 1 wk / 1 mo; bananas 3 days / 2-3 mo
+        {{"草莓"}, 2, 240},
+        {{"蓝莓"}, 7, 240},
+        {{"葡萄", "提子"}, 7, 30},
+        {{"香蕉"}, 3, 60},
+    };
+    for (const auto& r : kRules) {
+        if (ContainsAny(name, r.keys)) return {r.fridge_days, r.freezer_days};
+    }
+    return {};
 }
 
 }  // namespace food_catalog

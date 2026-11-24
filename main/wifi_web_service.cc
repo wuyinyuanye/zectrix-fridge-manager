@@ -289,6 +289,7 @@ void WifiWebService::StartHttpServer() {
     reg("/api/items", HTTP_POST, HandleItems);
     reg("/api/shopping", HTTP_POST, HandleShopping);
     reg("/api/timers", HTTP_POST, HandleTimers);
+    reg("/api/recipes", HTTP_POST, HandleRecipes);
     reg("/api/config", HTTP_POST, HandleConfig);
     reg("/api/ai/text", HTTP_POST, HandleAiText);
     reg("/api/ai/test", HTTP_POST, HandleAiTest);
@@ -422,6 +423,25 @@ esp_err_t WifiWebService::HandleTimers(httpd_req_t* req) {
     cJSON_Delete(root);
     self->NotifyUi(false, started);
     return SendJson(req, "{\"ok\":true}");
+}
+
+esp_err_t WifiWebService::HandleRecipes(httpd_req_t* req) {
+    auto* self = static_cast<WifiWebService*>(req->user_ctx);
+    std::string body;
+    if (!ReadJsonBody(req, &body)) return SendJson(req, "{\"ok\":false}");
+    cJSON* root = cJSON_Parse(body.c_str());
+    if (!root) return SendJson(req, "{\"ok\":false}");
+    const std::string action = JStr(root, "action");
+    const std::string title = JStr(root, "title");
+    cJSON_Delete(root);
+    if (action == "del") {
+        if (title.empty() || !self->store_->RemoveRecipe(title)) {
+            return SendJson(req, "{\"ok\":false,\"error\":\"未找到该菜谱\"}");
+        }
+        self->NotifyUi();
+        return SendJson(req, "{\"ok\":true}");
+    }
+    return SendJson(req, "{\"ok\":false,\"error\":\"未知操作\"}");
 }
 
 esp_err_t WifiWebService::HandleConfig(httpd_req_t* req) {

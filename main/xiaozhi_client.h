@@ -2,6 +2,7 @@
 #define ZECTRIX_FRIDGE_XIAOZHI_CLIENT_H_
 
 #include <atomic>
+#include <functional>
 #include <cstdint>
 #include <mutex>
 #include <string>
@@ -11,6 +12,8 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/event_groups.h"
 #include "fridge_store.h"
+
+class AudioService;
 
 struct XiaozhiOtaInfo {
     bool ok = false;
@@ -82,6 +85,23 @@ public:
     void InvalidateOtaCache();
     bool is_ptt_active() const { return ptt_active_.load(); }
 
+    // Where spoken replies (server TTS) are played. nullptr = text only.
+    void SetAudio(AudioService* audio) { audio_ = audio; }
+
+    // Speak a short notice through Xiaozhi in a background task (returns at once).
+    // The turn runs in "announce" mode: fridge tools are refused so nothing is changed.
+    // Returns false if the voice service is busy or the task could not start.
+    // on_done(spoken) runs on the announce task when the turn ends.
+    bool AnnounceAsync(const AppConfig& cfg, const std::string& notice,
+                       std::function<void(bool)> on_done = nullptr);
+    // Cancel a pending/playing announcement (e.g. alarm silenced by a key press).
+    void CancelAnnounce();
+    bool is_announcing() const { return announcing_.load(); }
+
+    // While a turn is running: what has been understood/executed so far, so the UI can show
+    // the result popup right away while the spoken reply keeps playing. False = nothing yet.
+    bool PeekTurnPreview(std::string* heard, std::string* summary, bool* data_changed) const;
+
 private:
     static void WsEventHandler(void* arg, esp_event_base_t base, int32_t event_id, void* data);
     void HandleWsEvent(int32_t event_id, esp_websocket_event_data_t* data);
@@ -92,6 +112,12 @@ private:
     bool OpenWsSession(const XiaozhiOtaInfo& ota, std::string* err_out);
     void CloseWsSession();
     std::string BuildToolsListJson() const;
+    bool AnnounceBlocking(const AppConfig& cfg, const std::string& notice);
+    static void AnnounceTaskEntry(void* arg);
+    void HandleBinaryFrame(const uint8_t* data, size_t len);
+    // Wait for the server to finish the turn (tts stop), keeping the socket open while
+    // its spoken reply is still streaming in.
+    void WaitTurnEnd();
 
     FridgeStore* store_ = nullptr;
     mutable std::mutex mutex_;
@@ -107,6 +133,12 @@ private:
     std::string session_id_;
     std::string rx_text_buf_;
     bool rx_in_text_msg_ = false;
+    std::vector<uint8_t> rx_bin_buf_;
+    bool rx_in_bin_msg_ = false;
+
+    AudioService* audio_ = nullptr;
+    std::atomic<bool> announcing_{false};
+    std::atomic<bool> announce_cancel_{false};
     std::string focus_ingredient_;
 
     // Per-turn collected results (protected by mutex_)

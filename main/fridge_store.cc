@@ -76,6 +76,18 @@ std::string ClampUtf8Bytes(const std::string& raw, size_t max_bytes) {
     return s.substr(0, cut);
 }
 
+// Map whatever the user / Xiaozhi said ("冷冻室", "冻起来", "保鲜层", "室温"...) onto the
+// three zones the app understands. Empty = unknown -> caller falls back to the food hint.
+std::string NormalizeZone(const std::string& raw) {
+    const std::string z = TrimSpaces(raw);
+    if (z.empty()) return "";
+    auto has = [&](const char* k) { return z.find(k) != std::string::npos; };
+    if (has("冷冻") || has("冰冻") || has("速冻") || has("冻") || z == "freezer") return "冷冻";
+    if (has("常温") || has("室温") || has("阴凉") || has("外面") || has("柜") || z == "room") return "常温";
+    if (has("冷藏") || has("保鲜") || has("冰箱") || has("藏") || z == "fridge") return "冷藏";
+    return "";
+}
+
 constexpr size_t kMaxNameBytes = 64;
 constexpr size_t kMaxQtyBytes = 32;
 constexpr size_t kMaxZoneBytes = 24;
@@ -690,6 +702,7 @@ bool FridgeStore::TryLoadJsonFileLocked(const char* path, bool* file_existed) {
             it.added_day = JInt(el, "added_day", TodayDayNumber());
             it.expire_day = JInt(el, "expire_day", 0);
             it.note = JStr(el, "note");
+            it.storage_reminded = JBool(el, "reminded", false);
             if (!it.name.empty()) {
                 next_id_ = std::max(next_id_, it.id + 1);
                 items_.push_back(it);
@@ -800,6 +813,7 @@ void FridgeStore::SaveToSpiffsLocked() {
         cJSON_AddNumberToObject(o, "added_day", it.added_day);
         cJSON_AddNumberToObject(o, "expire_day", it.expire_day);
         cJSON_AddStringToObject(o, "note", it.note.c_str());
+        if (it.storage_reminded) cJSON_AddBoolToObject(o, "reminded", true);
         cJSON_AddItemToArray(arr, o);
     }
 
@@ -964,7 +978,7 @@ uint32_t FridgeStore::AddOrUpdateItem(const std::string& name, const std::string
     const std::string clean_name = ClampUtf8Bytes(name, kMaxNameBytes);
     if (clean_name.empty()) return 0;
     const std::string clean_qty = ClampUtf8Bytes(qty, kMaxQtyBytes);
-    const std::string clean_zone = ClampUtf8Bytes(zone, kMaxZoneBytes);
+    const std::string clean_zone = NormalizeZone(ClampUtf8Bytes(zone, kMaxZoneBytes));
     const std::string clean_note = ClampUtf8Bytes(note, kMaxNoteBytes);
 
     std::lock_guard<std::mutex> lock(mutex_);
@@ -983,10 +997,14 @@ uint32_t FridgeStore::AddOrUpdateItem(const std::string& name, const std::string
             if (!clean_qty.empty()) {
                 it.qty = ClampUtf8Bytes(MergeQuantityStrings(it.qty, clean_qty), kMaxQtyBytes);
             }
-            if (!clean_zone.empty()) it.zone = eff_zone;
+            if (!clean_zone.empty() && it.zone != eff_zone) {
+                it.zone = eff_zone;
+                it.storage_reminded = false;  // fridge <-> freezer: different storage time
+            }
             // Preserve existing added_day so older batch age is not wiped on restock
             if (days_from_today > -900) {
                 it.expire_day = eff_expire;
+                it.storage_reminded = false;
             }
             if (!clean_note.empty()) it.note = clean_note;
             SaveToSpiffsLocked();
@@ -1026,6 +1044,7 @@ std::string FridgeStore::SetItemExpiryByName(const std::string& name, int days_f
         const int32_t clamped_days = std::clamp<int32_t>(days_from_today, -365, 3650);
         it.expire_day = (today > 0) ? (today + clamped_days) : (kUnsyncedExpiryBase - clamped_days);
     }
+    it.storage_reminded = false;
     SaveToSpiffsLocked();
     return it.name;
 }
@@ -1062,6 +1081,7 @@ bool FridgeStore::AdjustItemExpiry(uint32_t id, int delta_days) {
                 has_exp ? (cur_left + clamped_delta) : std::max<int32_t>(1, clamped_delta),
                 -365, 3650);
             it.expire_day = (today > 0) ? (today + new_left) : (kUnsyncedExpiryBase - new_left);
+            it.storage_reminded = false;
             SaveToSpiffsLocked();
             return true;
         }
@@ -1301,6 +1321,21 @@ void FridgeStore::PushRecipe(const RecipeCard& recipe) {
     recipes_.insert(recipes_.begin(), std::move(pinned));
     if (recipes_.size() > kMaxRecipes) recipes_.resize(kMaxRecipes);
     SaveToSpiffsLocked();
+}
+
+bool FridgeStore::RemoveRecipe(const std::string& title) {
+    if (title.empty()) return false;
+    std::lock_guard<std::mutex> lock(mutex_);
+    const auto old_size = recipes_.size();
+    recipes_.erase(std::remove_if(recipes_.begin(), recipes_.end(),
+                                  [&](const RecipeCard& r) { return r.title == title; }),
+                   recipes_.end());
+    if (recipes_.size() == old_size) return false;
+    if (recipes_.empty()) {
+        SeedDefaultRecipesLocked();
+    }
+    SaveToSpiffsLocked();
+    return true;
 }
 
 std::vector<ShoppingItem> FridgeStore::GetShoppingList() {
@@ -1600,7 +1635,7 @@ std::string FridgeStore::BuildPromptContext(const std::string& focus_ingredient)
         }
     }
     if (!focus_ingredient.empty()) {
-        ctx += "用户指定优先消耗食材: " + focus_ingredient + "\n";
+        ctx += "用户想用这样食材做菜: " + focus_ingredient + "（请推荐以它为主料的经典家常菜，不要硬拼其他库存）\n";
     }
     ctx += "采购清单:\n";
     if (shopping_.empty()) {
@@ -1732,4 +1767,77 @@ std::string FridgeStore::ExportStateJson(const std::string& ip, bool wifi_ok, bo
     std::string out(printed);
     cJSON_free(printed);
     return out;
+}
+
+int32_t FridgeStore::GetLastReminderDay() {
+    std::lock_guard<std::mutex> lock(mutex_);
+    nvs_handle_t h = 0;
+    int32_t v = 0;
+    if (nvs_open(kNvsNs, NVS_READONLY, &h) == ESP_OK) {
+        nvs_get_i32(h, "rem_day", &v);
+        nvs_close(h);
+    }
+    return v;
+}
+
+void FridgeStore::SetLastReminderDay(int32_t day) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    nvs_handle_t h = 0;
+    if (nvs_open(kNvsNs, NVS_READWRITE, &h) != ESP_OK) return;
+    if (nvs_set_i32(h, "rem_day", day) == ESP_OK) nvs_commit(h);
+    nvs_close(h);
+}
+
+std::string FridgeStore::BuildStorageReminderText(std::vector<uint32_t>* ids_out) {
+    if (ids_out) ids_out->clear();
+    std::lock_guard<std::mutex> lock(mutex_);
+    const int32_t today = TodayDayNumber();
+    struct Nudge { uint32_t id; std::string name; int age; double ratio; };
+    std::vector<Nudge> list;
+    for (const auto& it : items_) {
+        if (it.storage_reminded) continue;
+        const int age = ComputeItemAgeDays(it, today);
+        if (age <= 0) continue;
+        int limit = 0;
+        bool has_exp = false;
+        const int left = ComputeItemDaysLeft(it, today, &has_exp);
+        if (has_exp) {
+            limit = age + left;  // the user's own storage days win
+        } else if (it.zone == "冷冻") {
+            limit = food_catalog::LookupStorageGuide(it.name).freezer_days;
+        } else if (it.zone == "冷藏") {
+            limit = food_catalog::LookupStorageGuide(it.name).fridge_days;
+        }  // 常温: the chart only covers fridge/freezer -> only user-set days apply
+        if (limit <= 0 || age < limit) continue;
+        list.push_back({it.id, it.name, age, static_cast<double>(age) / limit});
+    }
+    if (list.empty()) return "";
+    std::stable_sort(list.begin(), list.end(),
+                     [](const Nudge& a, const Nudge& b) { return a.ratio > b.ratio; });
+    constexpr size_t kMaxSpoken = 4;
+    std::string out = "早上好，冰箱小提醒：";
+    for (size_t i = 0; i < list.size() && i < kMaxSpoken; ++i) {
+        if (i > 0) out += "，";
+        out += list[i].name + "已经放了" + std::to_string(list[i].age) + "天啦";
+        if (ids_out) ids_out->push_back(list[i].id);
+    }
+    if (list.size() > kMaxSpoken) {
+        // Not marked: they are named on another morning
+        out += "，还有" + std::to_string(list.size() - kMaxSpoken) + "样也放了挺久";
+    }
+    out += "，有空记得吃掉哦。";
+    return out;
+}
+
+void FridgeStore::MarkStorageReminded(const std::vector<uint32_t>& ids) {
+    if (ids.empty()) return;
+    std::lock_guard<std::mutex> lock(mutex_);
+    bool changed = false;
+    for (auto& it : items_) {
+        if (!it.storage_reminded && std::find(ids.begin(), ids.end(), it.id) != ids.end()) {
+            it.storage_reminded = true;
+            changed = true;
+        }
+    }
+    if (changed) SaveToSpiffsLocked();
 }

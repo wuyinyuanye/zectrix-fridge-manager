@@ -90,7 +90,15 @@ void Es8311AudioCodec::UpdateDeviceState() {
             .sample_rate = (uint32_t)input_sample_rate_,
             .mclk_multiple = 0,
         };
-        ESP_ERROR_CHECK(esp_codec_dev_open(dev_, &fs));
+        // esp_codec_dev's _i2s_data_set_fmt() unconditionally calls i2s_channel_disable()
+        // before reconfiguring slots/clocks, even when both channels were already disabled
+        // by a prior esp_codec_dev_close(). Silence that expected i2s_common error only
+        // during esp_codec_dev_open() and restore immediately afterward.
+        const esp_log_level_t prev_i2s_level = esp_log_level_get("i2s_common");
+        esp_log_level_set("i2s_common", ESP_LOG_NONE);
+        const int open_err = esp_codec_dev_open(dev_, &fs);
+        esp_log_level_set("i2s_common", prev_i2s_level);
+        ESP_ERROR_CHECK(open_err);
         ESP_ERROR_CHECK(esp_codec_dev_set_in_gain(dev_, input_gain_));
         ESP_ERROR_CHECK(esp_codec_dev_set_out_vol(dev_, output_volume_));
     } else if (!input_enabled_ && !output_enabled_ && dev_ != nullptr) {

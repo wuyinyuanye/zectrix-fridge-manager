@@ -39,6 +39,7 @@ struct FridgeItem {
     int32_t added_day = 0;
     int32_t expire_day = 0;
     std::string note;
+    bool storage_reminded = false;  // "已经放了N天啦" already spoken once for this item
 };
 
 struct ShoppingItem {
@@ -182,6 +183,7 @@ public:
     int AddMissingToShopping(const RecipeMatchView& view);
     int DeductCookedIngredients(const RecipeMatchView& view);
     void PushRecipe(const RecipeCard& recipe);
+    bool RemoveRecipe(const std::string& title);
 
     // Shopping list (Page 4)
     std::vector<ShoppingItem> GetShoppingList();
@@ -216,6 +218,16 @@ public:
                                 int battery_pct, bool charging);
 
     bool ConsumeStorageWarning(std::string* msg_out);
+
+    // Day number (TodayDayNumber) of the last spoken morning expiry reminder (NVS)
+    int32_t GetLastReminderDay();
+    void SetLastReminderDay(int32_t day);
+    // Short spoken nudge such as "冻鸡腿已经放了270天啦" for items that reached their
+    // recommended storage time (USDA chart; fridge vs freezer by storage zone) and have
+    // not been mentioned before. Never phrased as "expired". ids_out = items named in it.
+    std::string BuildStorageReminderText(std::vector<uint32_t>* ids_out);
+    // Each item is reminded only once: call after the notice was actually spoken.
+    void MarkStorageReminded(const std::vector<uint32_t>& ids);
 
 private:
     bool TryLoadJsonFileLocked(const char* path, bool* file_existed);

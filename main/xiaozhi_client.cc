@@ -1,5 +1,7 @@
 #include "xiaozhi_client.h"
 
+#include "audio_service.h"
+
 #include <arpa/inet.h>
 #include <opus_encoder.h>
 
@@ -330,6 +332,8 @@ bool XiaozhiClient::OpenWsSession(const XiaozhiOtaInfo& ota, std::string* err_ou
         session_id_.clear();
         rx_text_buf_.clear();
         rx_in_text_msg_ = false;
+        rx_bin_buf_.clear();
+        rx_in_bin_msg_ = false;
         turn_heard_.clear();
         turn_mcp_summary_.clear();
         turn_tts_text_.clear();
@@ -389,6 +393,67 @@ void XiaozhiClient::CloseWsSession() {
         esp_websocket_client_stop(ws_);
         esp_websocket_client_destroy(ws_);
         ws_ = nullptr;
+    }
+    // Whatever was received keeps playing; just mark the reply complete.
+    if (audio_) audio_->TtsEnd();
+}
+
+// One complete binary WebSocket message = one server Opus packet (TTS audio)
+void XiaozhiClient::HandleBinaryFrame(const uint8_t* data, size_t len) {
+    if (audio_ == nullptr || data == nullptr || announce_cancel_.load()) return;
+    const uint8_t* payload = data;
+    size_t plen = len;
+    if (ws_version_ == 2) {
+        if (len < sizeof(BinaryProto2)) return;
+        BinaryProto2 h;
+        std::memcpy(&h, data, sizeof(h));
+        const size_t n = ntohl(h.payload_size);
+        if (ntohs(h.type) != 0 || n > len - sizeof(BinaryProto2)) return;  // 0 = Opus audio
+        payload = data + sizeof(BinaryProto2);
+        plen = n;
+    } else if (ws_version_ == 3) {
+        if (len < sizeof(BinaryProto3)) return;
+        BinaryProto3 h;
+        std::memcpy(&h, data, sizeof(h));
+        const size_t n = ntohs(h.payload_size);
+        if (h.type != 0 || n > len - sizeof(BinaryProto3)) return;
+        payload = data + sizeof(BinaryProto3);
+        plen = n;
+    }
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        turn_last_activity_ms_ = NowMs();  // streaming voice counts as an active turn
+    }
+    audio_->TtsPushOpus(payload, plen);
+}
+
+bool XiaozhiClient::PeekTurnPreview(std::string* heard, std::string* summary,
+                                    bool* data_changed) const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    const std::string& text = !turn_mcp_summary_.empty() ? turn_mcp_summary_ : turn_tts_text_;
+    if (text.empty()) return false;
+    if (heard) *heard = turn_heard_;
+    if (summary) *summary = text;
+    if (data_changed) *data_changed = turn_data_changed_;
+    return true;
+}
+
+void XiaozhiClient::WaitTurnEnd() {
+    constexpr int64_t kNoReplyMs = 16000;   // nothing at all from the server
+    constexpr int64_t kHardCapMs = 30000;   // long spoken replies still end
+    constexpr int64_t kIdleMs = 3000;       // tool done / reply received, then silence
+    const int64_t start = NowMs();
+    while (true) {
+        EventBits_t b = xEventGroupWaitBits(evt_, kBitTurnDone | kBitWsClosed,
+                                            pdFALSE, pdFALSE, pdMS_TO_TICKS(300));
+        if (b & (kBitTurnDone | kBitWsClosed)) break;
+        const int64_t now = NowMs();
+        if (now - start > kHardCapMs) break;
+        std::lock_guard<std::mutex> lock(mutex_);
+        const bool got_result = turn_mcp_calls_ > 0 || !turn_tts_text_.empty();
+        const int64_t idle = now - turn_last_activity_ms_;
+        if (got_result && idle > kIdleMs) break;   // server went quiet (audio included)
+        if (!got_result && now - start > kNoReplyMs) break;
     }
 }
 
@@ -461,6 +526,16 @@ void XiaozhiClient::HandleWsEvent(int32_t event_id, esp_websocket_event_data_t* 
                 rx_in_text_msg_ = false;
                 HandleIncomingJson(msg);
             }
+        } else if (op == 0x00 && rx_in_bin_msg_) {  // Continuation of a fragmented binary message
+            if (data->data_ptr && data->data_len > 0 && rx_bin_buf_.size() < 16384) {
+                const auto* p = reinterpret_cast<const uint8_t*>(data->data_ptr);
+                rx_bin_buf_.insert(rx_bin_buf_.end(), p, p + data->data_len);
+            }
+            if (data->fin && data->payload_offset + data->data_len >= data->payload_len) {
+                rx_in_bin_msg_ = false;
+                HandleBinaryFrame(rx_bin_buf_.data(), rx_bin_buf_.size());
+                rx_bin_buf_.clear();
+            }
         } else if (op == 0x00 && rx_in_text_msg_) {  // Continuation frame of fragmented text message
             if (data->data_ptr && data->data_len > 0 && rx_text_buf_.size() < 32768) {
                 rx_text_buf_.append(data->data_ptr, static_cast<size_t>(data->data_len));
@@ -473,8 +548,22 @@ void XiaozhiClient::HandleWsEvent(int32_t event_id, esp_websocket_event_data_t* 
                 HandleIncomingJson(msg);
             }
         } else if (op == 0x02) {
-            // Binary audio frame; ensure stale fragmented text state is cleared if interleaved
-            if (data->payload_offset == 0) rx_in_text_msg_ = false;
+            // Binary = server TTS Opus audio (may arrive split across several DATA events)
+            if (data->payload_offset == 0) {
+                rx_in_text_msg_ = false;
+                rx_bin_buf_.clear();
+                rx_in_bin_msg_ = true;
+            }
+            if (rx_in_bin_msg_ && data->data_ptr && data->data_len > 0 && rx_bin_buf_.size() < 16384) {
+                const auto* p = reinterpret_cast<const uint8_t*>(data->data_ptr);
+                rx_bin_buf_.insert(rx_bin_buf_.end(), p, p + data->data_len);
+            }
+            if (rx_in_bin_msg_ && data->fin &&
+                data->payload_offset + data->data_len >= data->payload_len) {
+                rx_in_bin_msg_ = false;
+                HandleBinaryFrame(rx_bin_buf_.data(), rx_bin_buf_.size());
+                rx_bin_buf_.clear();
+            }
         }
     } else if (event_id == WEBSOCKET_EVENT_DISCONNECTED || event_id == WEBSOCKET_EVENT_ERROR) {
         ESP_LOGI(kTag, "WS closed/error id=%ld", static_cast<long>(event_id));
@@ -488,14 +577,14 @@ void XiaozhiClient::HandleWsEvent(int32_t event_id, esp_websocket_event_data_t* 
 
 std::string XiaozhiClient::BuildToolsListJson() const {
     return R"JSON([
-{"name":"fridge_get_inventory","description":"读取冰箱当前全部食材库存与采购清单。回答冰箱有什么、或者推荐菜谱前必须先调用本工具。","inputSchema":{"type":"object","properties":{},"required":[]}},
-{"name":"fridge_add_item","description":"向家庭冰箱放入或更新一样食材。若用户说了保质期几天、有效期几天或还剩几天过期，务必传入整数days；若用户完全没提保质期，不要传days。","inputSchema":{"type":"object","properties":{"name":{"type":"string","description":"食材名称，如鲜牛奶、土鸡蛋"},"qty":{"type":"string","description":"数量，如2盒、1斤(未提可省略)"},"zone":{"type":"string","description":"存放区:冷藏/冷冻/常温"},"days":{"type":"integer","description":"保质期或剩余有效天数，如7表示7天、0表示今天到期(未提及保质期时省略)"}},"required":["name"]}},
+{"name":"fridge_get_inventory","description":"读取冰箱当前全部食材库存与采购清单。回答冰箱有什么、或者推荐菜谱前先调用本工具，用来挑选能用上现有食材的经典家常菜。","inputSchema":{"type":"object","properties":{},"required":[]}},
+{"name":"fridge_add_item","description":"向家庭冰箱放入或更新一样食材。若用户说了保质期几天、有效期几天或还剩几天过期，务必传入整数days；若用户完全没提保质期，不要传days。","inputSchema":{"type":"object","properties":{"name":{"type":"string","description":"食材名称，如鲜牛奶、土鸡蛋"},"qty":{"type":"string","description":"数量，如2盒、1斤(未提可省略)"},"zone":{"type":"string","enum":["冷藏","冷冻","常温"],"description":"存放区，只能是冷藏、冷冻、常温三者之一。用户说放冷冻、冻起来、冷冻室时传冷冻；说放冷藏、保鲜层时传冷藏；没提就不传。把已有食材换个地方放(如挪到冷冻)也用本工具传新的zone"},"days":{"type":"integer","description":"保质期或剩余有效天数，如7表示7天、0表示今天到期(未提及保质期时省略)"}},"required":["name"]}},
 {"name":"fridge_set_expiry","description":"专门设置或修改冰箱已有食材的保质期天数/剩余天数(例如:牛奶还剩3天、酸奶保质期7天、把鸡蛋改成10天过期)，不改动原有数量和分区。","inputSchema":{"type":"object","properties":{"name":{"type":"string","description":"食材名称"},"days":{"type":"integer","description":"保质期剩余天数(0表示今天到期，3表示还剩3天)"}},"required":["name","days"]}},
 {"name":"fridge_remove_item","description":"食材吃完了或用完了，从冰箱库存中移除。","inputSchema":{"type":"object","properties":{"name":{"type":"string","description":"食材名称"}},"required":["name"]}},
 {"name":"fridge_add_shopping","description":"将缺的食材加入家庭采购清单。","inputSchema":{"type":"object","properties":{"name":{"type":"string","description":"采购食材名称"},"qty":{"type":"string","description":"数量，如1把"}},"required":["name"]}},
 {"name":"fridge_start_timer","description":"启动厨房倒计时闹钟。","inputSchema":{"type":"object","properties":{"label":{"type":"string","description":"计时名称，如炖排骨"},"minutes":{"type":"integer","description":"分钟数"},"seconds":{"type":"integer","description":"秒数"}},"required":["minutes"]}},
 {"name":"fridge_stop_timers","description":"停止或取消全部正在运行的厨房倒计时。","inputSchema":{"type":"object","properties":{},"required":[]}},
-{"name":"fridge_set_recipe","description":"向墨水屏推送一道详细菜谱(3到4步，每步24字以内)，必须优先使用冰箱现有食材。","inputSchema":{"type":"object","properties":{"title":{"type":"string","description":"菜名"},"summary":{"type":"string","description":"简短卖点"},"time_min":{"type":"integer","description":"预计用时分钟"},"ingredients":{"type":"array","items":{"type":"object","properties":{"name":{"type":"string"},"amount":{"type":"string"}}}},"steps":{"type":"array","items":{"type":"object","properties":{"text":{"type":"string"},"timer_min":{"type":"integer"},"heat":{"type":"string"}}}}},"required":["title","steps"]}},
+{"name":"fridge_set_recipe","description":"向墨水屏推送一道菜谱(3到4步，每步24字以内)。只能推送真实存在、大家熟知的经典家常菜，菜名、配料和做法遵循传统做法；可以优先挑能用上冰箱库存的菜，但绝不能为了凑库存把不相干的食材拼成一道菜或自创菜名(例如不要出现菠菜排骨汤)。冰箱里的几样食材若不适合同做一道菜，就只推荐其中一道正宗的菜。配料要按正宗做法完整列出，冰箱缺的也要列。","inputSchema":{"type":"object","properties":{"title":{"type":"string","description":"菜名"},"summary":{"type":"string","description":"简短卖点"},"time_min":{"type":"integer","description":"预计用时分钟"},"ingredients":{"type":"array","items":{"type":"object","properties":{"name":{"type":"string"},"amount":{"type":"string"}}}},"steps":{"type":"array","items":{"type":"object","properties":{"text":{"type":"string"},"timer_min":{"type":"integer"},"heat":{"type":"string"}}}}},"required":["title","steps"]}},
 {"name":"fridge_cook_step","description":"烹饪步骤翻页，delta=1下一步，delta=-1上一步。","inputSchema":{"type":"object","properties":{"delta":{"type":"integer","description":"1下一步，-1上一步"}},"required":["delta"]}}
 ])JSON";
 }
@@ -575,7 +664,10 @@ void XiaozhiClient::HandleMcpRequest(const void* payload_cjson) {
         std::string tool_text;
         bool record_summary = true;
 
-        if (name == "fridge_get_inventory") {
+        if (announcing_.load() && name != "fridge_get_inventory") {
+            tool_text = "当前为提醒播报，不执行任何操作，请直接把提醒内容说给用户听";
+            record_summary = false;
+        } else if (name == "fridge_get_inventory") {
             std::string focus;
             {
                 std::lock_guard<std::mutex> lock(mutex_);
@@ -789,7 +881,11 @@ void XiaozhiClient::HandleIncomingJson(const std::string& text) {
                 turn_tts_text_ += txt;
             }
         }
+        if (state == "start" && audio_ && !announce_cancel_.load()) {
+            audio_->TtsBegin();
+        }
         if (state == "stop") {
+            if (audio_) audio_->TtsEnd();
             xEventGroupSetBits(evt_, kBitTurnDone);
         }
     }
@@ -945,17 +1041,7 @@ XiaozhiVoiceResult XiaozhiClient::FinishPttWithWav(const std::vector<uint8_t>& w
         if (s) { SendTextLocked(s); cJSON_free(s); }
     }
 
-    // Wait up to 16s for tts stop / turn complete
-    const int64_t wait_deadline = NowMs() + 16000;
-    while (NowMs() < wait_deadline) {
-        EventBits_t b = xEventGroupWaitBits(evt_, kBitTurnDone | kBitWsClosed,
-                                            pdFALSE, pdFALSE, pdMS_TO_TICKS(500));
-        if (b & (kBitTurnDone | kBitWsClosed)) break;
-        std::lock_guard<std::mutex> lock(mutex_);
-        if (turn_mcp_calls_ > 0 && (NowMs() - turn_last_activity_ms_) > 3000) {
-            break;  // Tool already executed and server went idle
-        }
-    }
+    WaitTurnEnd();
 
     CloseWsSession();
 
@@ -1057,14 +1143,7 @@ XiaozhiVoiceResult XiaozhiClient::SendTextCommand(const AppConfig& cfg,
         cJSON_free(mstr);
     }
 
-    const int64_t wait_deadline = NowMs() + 16000;
-    while (NowMs() < wait_deadline) {
-        EventBits_t b = xEventGroupWaitBits(evt_, kBitTurnDone | kBitWsClosed,
-                                            pdFALSE, pdFALSE, pdMS_TO_TICKS(500));
-        if (b & (kBitTurnDone | kBitWsClosed)) break;
-        std::lock_guard<std::mutex> lock(mutex_);
-        if (turn_mcp_calls_ > 0 && (NowMs() - turn_last_activity_ms_) > 3000) break;
-    }
+    WaitTurnEnd();
 
     CloseWsSession();
 
@@ -1131,4 +1210,104 @@ bool XiaozhiClient::TestConnection(const AppConfig& cfg, XiaozhiOtaInfo* ota_out
         return false;
     }
     return true;
+}
+
+// ============================================================================
+// Spoken notices (timer done / expiry reminder) through the same Xiaozhi turn
+// ============================================================================
+namespace {
+struct AnnounceArgs {
+    XiaozhiClient* self;
+    AppConfig cfg;
+    std::string notice;
+    std::function<void(bool)> on_done;
+};
+}  // namespace
+
+bool XiaozhiClient::AnnounceAsync(const AppConfig& cfg, const std::string& notice,
+                                  std::function<void(bool)> on_done) {
+    if (notice.empty() || audio_ == nullptr || ptt_active_.load()) return false;
+    bool expected = false;
+    if (!announcing_.compare_exchange_strong(expected, true)) return false;
+    announce_cancel_.store(false);
+    auto* args = new (std::nothrow) AnnounceArgs{this, cfg, notice, std::move(on_done)};
+    // TLS handshake + JSON: same stack budget as the other network workers
+    if (!args || xTaskCreate(&XiaozhiClient::AnnounceTaskEntry, "xz_announce", 16384, args, 4,
+                             nullptr) != pdPASS) {
+        delete args;
+        announcing_.store(false);
+        return false;
+    }
+    return true;
+}
+
+void XiaozhiClient::AnnounceTaskEntry(void* arg) {
+    auto* a = static_cast<AnnounceArgs*>(arg);
+    const bool ok = a->self->AnnounceBlocking(a->cfg, a->notice);
+    ESP_LOGI(kTag, "announce %s", ok ? "done" : "skipped/failed");
+    a->self->announcing_.store(false);
+    if (a->on_done) a->on_done(ok);
+    delete a;
+    vTaskDelete(nullptr);
+}
+
+void XiaozhiClient::CancelAnnounce() {
+    if (!announcing_.load()) return;
+    announce_cancel_.store(true);
+    if (audio_) audio_->TtsStop();
+}
+
+bool XiaozhiClient::AnnounceBlocking(const AppConfig& cfg, const std::string& notice) {
+    std::unique_lock<std::mutex> call_lock(call_mutex_, std::try_to_lock);
+    if (!call_lock.owns_lock() || ptt_active_.load()) return false;
+
+    XiaozhiOtaInfo ota;
+    if (!CheckOta(cfg, &ota, false) || ota.needs_activation) return false;
+    std::string ws_err;
+    if (!OpenWsSession(ota, &ws_err)) {
+        InvalidateOtaCache();
+        if (!CheckOta(cfg, &ota, true) || ota.needs_activation || !OpenWsSession(ota, &ws_err)) {
+            return false;
+        }
+    }
+    EventBits_t bits = xEventGroupWaitBits(evt_, kBitHelloOk | kBitWsClosed,
+                                           pdFALSE, pdFALSE, pdMS_TO_TICKS(5000));
+    if (!(bits & kBitHelloOk) || announce_cancel_.load()) {
+        CloseWsSession();
+        return false;
+    }
+    xEventGroupWaitBits(evt_, kBitMcpReady | kBitWsClosed, pdFALSE, pdFALSE, pdMS_TO_TICKS(3000));
+
+    std::string sid;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        sid = session_id_;
+    }
+    const std::string text =
+        "（这是冰箱设备的自动提醒，请用自然亲切的语气把下面这句话播报出来，"
+        "不要调用任何工具，不要提问，不要补充其他内容）" + notice;
+    cJSON* msg = cJSON_CreateObject();
+    cJSON_AddStringToObject(msg, "session_id", sid.c_str());
+    cJSON_AddStringToObject(msg, "type", "listen");
+    cJSON_AddStringToObject(msg, "state", "detect");
+    cJSON_AddStringToObject(msg, "text", text.c_str());
+    char* mstr = cJSON_PrintUnformatted(msg);
+    cJSON_Delete(msg);
+    if (mstr) {
+        SendTextLocked(mstr);
+        cJSON_free(mstr);
+    }
+
+    bool spoke = false;
+    const int64_t deadline = NowMs() + 20000;
+    while (NowMs() < deadline && !announce_cancel_.load()) {
+        EventBits_t b = xEventGroupWaitBits(evt_, kBitTurnDone | kBitWsClosed,
+                                            pdFALSE, pdFALSE, pdMS_TO_TICKS(300));
+        if (b & (kBitTurnDone | kBitWsClosed)) {
+            spoke = (b & kBitTurnDone) != 0;
+            break;
+        }
+    }
+    CloseWsSession();
+    return spoke;
 }
