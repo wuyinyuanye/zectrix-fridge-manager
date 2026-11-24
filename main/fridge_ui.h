@@ -59,8 +59,12 @@ public:
     // Non-blocking progress card while AI generates custom recipe
     esp_err_t RenderLoadingPopup(const std::string& title, const std::string& detail);
 
-    // Confirmation dialog when user requests sleep/shutdown while kitchen timer is active
-    esp_err_t RenderSleepTimerConfirmPopup(const std::string& timer_desc, int choice_idx);
+    // Confirmation dialog when user requests sleep/reboot/shutdown while kitchen timer is active
+    esp_err_t RenderSleepTimerConfirmPopup(const std::string& timer_desc, int choice_idx,
+                                           const char* action_label = "休眠");
+
+    // Power action picker opened from Page 5 ("重启 / 清屏关机")
+    esp_err_t RenderPowerMenuPopup(int choice_idx);
 
     // Page 2: Interlocking Recipe (read-only info borderless; 3 unmistakable buttons at bottom)
     esp_err_t RenderRecipePage(const UiTopBar& bar,

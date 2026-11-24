@@ -295,6 +295,7 @@ void WifiWebService::StartHttpServer() {
     reg("/api/ai/test", HTTP_POST, HandleAiTest);
     reg("/api/ai/status", HTTP_GET, HandleAiStatus);
     reg("/api/refresh", HTTP_POST, HandleRefresh);
+    reg("/api/power", HTTP_POST, HandlePower);
     reg("/api/diag/mic", HTTP_POST, HandleDiagMic);
 }
 
@@ -656,6 +657,25 @@ esp_err_t WifiWebService::HandleRefresh(httpd_req_t* req) {
     auto* self = static_cast<WifiWebService*>(req->user_ctx);
     self->NotifyUi();
     return SendJson(req, "{\"ok\":true}");
+}
+
+esp_err_t WifiWebService::HandlePower(httpd_req_t* req) {
+    auto* self = static_cast<WifiWebService*>(req->user_ctx);
+    std::string body;
+    if (!ReadJsonBody(req, &body)) return SendJson(req, "{\"ok\":false}");
+    cJSON* root = cJSON_Parse(body.c_str());
+    if (!root) return SendJson(req, "{\"ok\":false}");
+    const std::string action = JStr(root, "action");
+    cJSON_Delete(root);
+    if (action == "reboot") {
+        self->pending_power_req_.store(static_cast<int>(PowerRequest::kReboot));
+        return SendJson(req, "{\"ok\":true,\"action\":\"reboot\"}");
+    }
+    if (action == "shutdown") {
+        self->pending_power_req_.store(static_cast<int>(PowerRequest::kShutdown));
+        return SendJson(req, "{\"ok\":true,\"action\":\"shutdown\"}");
+    }
+    return SendJson(req, "{\"ok\":false,\"error\":\"未知电源操作\"}");
 }
 
 esp_err_t WifiWebService::HandleDiagMic(httpd_req_t* req) {

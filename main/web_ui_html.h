@@ -130,6 +130,18 @@ button.sm{padding:5px 9px;font-size:12px}
     </div>
     <div class="msg hide" id="cfg-msg"></div>
   </div>
+
+  <div class="card">
+    <h3 style="margin:0 0 6px;font-size:15px">3. 设备电源</h3>
+    <div class="meta" style="margin-bottom:8px">
+      远程重启设备，或清空墨水屏并关机（所有库存、菜谱与配置均会保留）。
+    </div>
+    <div class="row">
+      <button class="ghost" style="flex:1" onclick="powerAct('reboot')">重启设备</button>
+      <button style="flex:1" onclick="powerAct('shutdown')">清屏并关机</button>
+    </div>
+    <div class="msg hide" id="pwr-msg"></div>
+  </div>
 </div>
 
 <script>
@@ -256,6 +268,21 @@ async function testAi(){
     m.textContent='✗ 未连通: '+(r.error||'连接失败');
   }
   load();
+}
+async function powerAct(action){
+  const label=action==='reboot'?'重启设备':'清屏并关机';
+  if(!confirm('确定要'+label+'吗？'))return;
+  const m=$('pwr-msg'); m.classList.remove('hide'); m.textContent='正在发送'+label+'指令...';
+  try{
+    const r=await post('/api/power',{action});
+    if(r.ok){
+      m.textContent=action==='reboot'?'已下发重启指令，设备约 5 秒后重新连网。':'已下发清屏关机指令，设备即将关机。';
+    }else{
+      m.textContent='✗ '+(r.error||'操作失败');
+    }
+  }catch(e){
+    m.textContent='指令已发送，设备正在执行'+label+'。';
+  }
 }
 load();
 </script>

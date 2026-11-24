@@ -946,7 +946,7 @@ esp_err_t FridgeUi::RenderSettingsPage(const UiTopBar& bar,
         "语音说明 / 绑定码",
         bar.ap_mode ? "重连家庭Wi-Fi" : "开启AP配网热点",
         "立即小憩 (灰阶封面)",
-        "清屏并关机",
+        "重启 / 清屏关机",
     };
     const UiIcon icons[4] = {UiIcon::kMic, UiIcon::kWifi, UiIcon::kMoon, UiIcon::kPower};
     const int clamped = std::clamp(selected_idx, 0, 3);
@@ -1058,23 +1058,43 @@ esp_err_t FridgeUi::RenderLoadingPopup(const std::string& title, const std::stri
     return FlushRect1bpp({px - 6, py - 6, pw + 16, ph + 16});
 }
 
-esp_err_t FridgeUi::RenderSleepTimerConfirmPopup(const std::string& timer_desc, int choice_idx) {
+esp_err_t FridgeUi::RenderSleepTimerConfirmPopup(const std::string& timer_desc, int choice_idx,
+                                                 const char* action_label) {
     const int px = 34, py = 42, pw = 332, ph = 212;
     DrawPopupFrame(px, py, pw, ph, UiIcon::kClock, "厨房倒计时运行中!", Mood::kWorried);
 
+    const std::string act = (action_label && action_label[0] != '\0') ? action_label : "休眠";
     canvas_.DrawWrappedText(
         px + 16, py + 46, pw - 32, 2, 21,
-        "正在计时（" + timer_desc + "），休眠或关机后将无法到点响铃。",
+        "正在计时（" + timer_desc + "），" + act + "后将无法到点响铃。",
         1, 0);
 
-    const char* opts[2] = {"继续做菜，暂不休眠", "取消全部计时并休眠"};
-    const UiIcon icons[2] = {UiIcon::kPot, UiIcon::kMoon};
+    const std::string opts[2] = {"继续做菜，暂不" + act, "取消全部计时并" + act};
+    const UiIcon act_icon =
+        (act == "重启") ? UiIcon::kRefresh : ((act == "关机") ? UiIcon::kPower : UiIcon::kMoon);
+    const UiIcon icons[2] = {UiIcon::kPot, act_icon};
     for (int i = 0; i < 2; ++i) {
         DrawButton(px + 16, py + 96 + i * 38, pw - 32, 31, opts[i], icons[i], true, i == choice_idx);
     }
 
     canvas_.DottedHLine(px + 12, py + ph - 33, pw - 24, 3, 0);
     DrawKeyHints(px + 16, py + ph - 26, {{"上", "返回"}, {"OK", "确认"}, {"下", "换选项"}});
+    return FlushRect1bpp({px - 6, py - 6, pw + 16, ph + 16});
+}
+
+esp_err_t FridgeUi::RenderPowerMenuPopup(int choice_idx) {
+    const int px = 44, py = 46, pw = 312, ph = 206;
+    DrawPopupFrame(px, py, pw, ph, UiIcon::kPower, "重启或关机", Mood::kNone);
+
+    const char* opts[3] = {"重启设备", "清屏并关机", "取消返回"};
+    const UiIcon icons[3] = {UiIcon::kRefresh, UiIcon::kPower, UiIcon::kCross};
+    const int clamped = std::clamp(choice_idx, 0, 2);
+    for (int i = 0; i < 3; ++i) {
+        DrawButton(px + 20, py + 48 + i * 40, pw - 40, 32, opts[i], icons[i], true, i == clamped);
+    }
+
+    canvas_.DottedHLine(px + 14, py + ph - 33, pw - 28, 3, 0);
+    DrawKeyHints(px + 16, py + ph - 26, {{"上", "取消"}, {"下", "切换"}, {"OK", "确认"}});
     return FlushRect1bpp({px - 6, py - 6, pw + 16, ph + 16});
 }
 

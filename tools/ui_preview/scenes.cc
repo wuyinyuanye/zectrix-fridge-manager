@@ -117,6 +117,8 @@ int main(int argc, char** argv) {
     std::vector<KitchenTimer> ringing = timers;
     if (!ringing.empty()) { ringing[0].active = false; ringing[0].ringing = true; }
     Check(ui.ShowAlarmScreen(ringing), "alarm"); Shot("22_alarm");
+    Check(ui.RenderSettingsPage(bar, cfg, "192.168.1.50", "http://192.168.1.50/", "手机扫码管理", "", pwr, 3, true), "base");
+    Check(ui.RenderPowerMenuPopup(0), "power menu"); Shot("23_power_menu");
 
     std::fprintf(stderr, "%s\n", g_fail ? "SOME SCENES FAILED" : "all scenes rendered");
     return g_fail ? 1 : 0;

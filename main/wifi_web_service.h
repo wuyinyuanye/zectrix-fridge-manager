@@ -17,6 +17,12 @@ public:
     // notify(switch_to_recipe, switch_to_cook)
     using NotifyCallback = std::function<void(bool, bool)>;
 
+    enum class PowerRequest : int {
+        kNone = 0,
+        kReboot = 1,
+        kShutdown = 2,
+    };
+
     WifiWebService(ZectrixBoard* board, FridgeStore* store,
                    AudioService* audio = nullptr, XiaozhiClient* xiaozhi = nullptr);
     ~WifiWebService();
@@ -35,6 +41,9 @@ public:
     std::string access_url() const;
     std::string ap_wifi_qr_payload() const;
     const std::string& ap_password() const { return ap_pass_; }
+    PowerRequest TakePendingPowerRequest() {
+        return static_cast<PowerRequest>(pending_power_req_.exchange(0));
+    }
 
 private:
     static void WifiEventHandler(void* arg, esp_event_base_t base, int32_t id, void* data);
@@ -55,6 +64,7 @@ private:
     static esp_err_t HandleAiTest(httpd_req_t* req);
     static esp_err_t HandleAiStatus(httpd_req_t* req);
     static esp_err_t HandleRefresh(httpd_req_t* req);
+    static esp_err_t HandlePower(httpd_req_t* req);
     static esp_err_t HandleDiagMic(httpd_req_t* req);
 
     struct AiJobState {
@@ -92,6 +102,7 @@ private:
     std::atomic<int> sta_retry_count_{0};
     std::atomic<bool> pending_ap_fallback_{false};
     std::atomic<bool> pending_sta_reconnect_{false};
+    std::atomic<int> pending_power_req_{0};
 
     std::atomic<bool> wifi_connected_{false};
     std::atomic<bool> ap_mode_{false};

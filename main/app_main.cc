@@ -11,6 +11,7 @@
 #include "driver/rtc_io.h"
 #include "esp_log.h"
 #include "esp_sleep.h"
+#include "esp_system.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -162,6 +163,15 @@ public:
         while (true) {
             const int64_t now = NowMs();
             wifi_web_.Poll();
+
+            const auto preq = wifi_web_.TakePendingPowerRequest();
+            if (preq == WifiWebService::PowerRequest::kReboot) {
+                vTaskDelay(pdMS_TO_TICKS(200));  // let HTTP response finish flushing
+                RebootDevice();
+            } else if (preq == WifiWebService::PowerRequest::kShutdown) {
+                vTaskDelay(pdMS_TO_TICKS(200));
+                FullClearShutdown();
+            }
 
             const bool clock_now_synced = FridgeStore::IsClockSynced();
             if (clock_now_synced && !clock_was_synced) {
@@ -712,9 +722,9 @@ private:
                     last_net_ap_ = wifi_web_.is_ap_mode();
                     RenderCurrentTab(false);
                 } else if (selected_ == 2) {
-                    RequestSleepOrConfirm(false);
+                    RequestPowerOrConfirm(PowerAction::kSleep);
                 } else {
-                    RequestSleepOrConfirm(true);
+                    RunPowerMenuPopup();
                 }
             }
         }
@@ -939,8 +949,24 @@ private:
         return false;
     }
 
-    // Warn before entering Deep Sleep / Shutdown if a kitchen countdown is actively running!
+    enum class PowerAction : uint8_t {
+        kSleep = 0,
+        kReboot = 1,
+        kShutdown = 2,
+    };
+
+    [[noreturn]] void ExecutePowerAction(PowerAction action) {
+        if (action == PowerAction::kReboot) RebootDevice();
+        if (action == PowerAction::kShutdown) FullClearShutdown();
+        EnterDeepSleepStandby();
+    }
+
+    // Warn before entering Deep Sleep / Reboot / Shutdown if a kitchen countdown is actively running!
     void RequestSleepOrConfirm(bool full_shutdown) {
+        RequestPowerOrConfirm(full_shutdown ? PowerAction::kShutdown : PowerAction::kSleep);
+    }
+
+    void RequestPowerOrConfirm(PowerAction action) {
         const auto timers = store_.GetTimers();
         const int64_t now_ms = NowMs();
         std::string active_desc;
@@ -953,13 +979,15 @@ private:
             }
         }
         if (active_desc.empty()) {
-            if (full_shutdown) FullClearShutdown();
-            else EnterDeepSleepStandby();
+            ExecutePowerAction(action);
         }
 
+        const char* act_label =
+            (action == PowerAction::kReboot) ? "重启"
+                                             : ((action == PowerAction::kShutdown) ? "关机" : "休眠");
         audio_.PlayChimeError();
         int choice = 0;
-        ui_.RenderSleepTimerConfirmPopup(active_desc, choice);
+        ui_.RenderSleepTimerConfirmPopup(active_desc, choice, act_label);
         while (true) {
             ZectrixButtonEvent ev;
             if (!board_.WaitButton(&ev, pdMS_TO_TICKS(15000))) break;
@@ -967,14 +995,44 @@ private:
             if (ev.button == ZectrixButton::kUp) break;
             if (ev.button == ZectrixButton::kDown) {
                 choice = (choice + 1) % 2;
-                ui_.RenderSleepTimerConfirmPopup(active_desc, choice);
+                ui_.RenderSleepTimerConfirmPopup(active_desc, choice, act_label);
             } else if (ev.button == ZectrixButton::kOk) {
                 if (choice == 1) {
                     store_.StopAllTimers();
-                    if (full_shutdown) FullClearShutdown();
-                    else EnterDeepSleepStandby();
+                    ExecutePowerAction(action);
                 }
                 break;
+            }
+        }
+        board_.DrainButtons();
+        RenderCurrentTab(false);
+    }
+
+    void RunPowerMenuPopup() {
+        int choice = 0;
+        ui_.RenderPowerMenuPopup(choice);
+        while (true) {
+            ZectrixButtonEvent ev;
+            if (!board_.WaitButton(&ev, pdMS_TO_TICKS(20000))) break;
+            if (ev.button == ZectrixButton::kDown && ev.action == ZectrixButtonAction::kLongPress) {
+                RequestPowerOrConfirm(PowerAction::kSleep);
+                return;
+            }
+            if (ev.action != ZectrixButtonAction::kClick) continue;
+            if (ev.button == ZectrixButton::kUp) {
+                break;  // UP = immediate cancel
+            } else if (ev.button == ZectrixButton::kDown) {
+                choice = (choice + 1) % 3;
+                ui_.RenderPowerMenuPopup(choice);
+            } else if (ev.button == ZectrixButton::kOk) {
+                if (choice == 0) {
+                    RequestPowerOrConfirm(PowerAction::kReboot);
+                    return;
+                } else if (choice == 1) {
+                    RequestPowerOrConfirm(PowerAction::kShutdown);
+                    return;
+                }
+                break;  // choice == 2: cancel
             }
         }
         board_.DrainButtons();
@@ -1193,16 +1251,44 @@ private:
         esp_deep_sleep_start();
     }
 
-    [[noreturn]] void FullClearShutdown() {
-        ESP_LOGI(kTag, "clearing display & cutting battery power latch");
-        ui_.ClearDisplay();
-        if (board_.nfc() != nullptr) board_.nfc()->PowerOff();
+    [[noreturn]] void RebootDevice() {
+        ESP_LOGI(kTag, "restarting device cleanly");
+        xiaozhi_.CancelAnnounce();
+        audio_.TtsStop();
+        ui_.ShowBootSplash("正在重启极趣小冰箱...");
         wifi_web_.Stop();
         board_.SetPowerLed(false);
         board_.SetAudioPower(false);
-        vTaskDelay(pdMS_TO_TICKS(100));
+        vTaskDelay(pdMS_TO_TICKS(150));
+        esp_restart();
+    }
+
+    [[noreturn]] void FullClearShutdown() {
+        ESP_LOGI(kTag, "clearing display & cutting battery power latch");
+        xiaozhi_.CancelAnnounce();
+        audio_.TtsStop();
+        ui_.ClearDisplay();
+        if (board_.nfc() != nullptr) board_.nfc()->PowerOff();
+        if (board_.rtc() != nullptr) {
+            board_.rtc()->DisableAlarm();
+            board_.rtc()->ClearAlarmFlag();
+        }
+        wifi_web_.Stop();
+        board_.SetPowerLed(false);
+        board_.SetAudioPower(false);
+        for (int i = 0; i < 30 && board_.IsButtonPressed(ZectrixButton::kOk); ++i) {
+            vTaskDelay(pdMS_TO_TICKS(50));
+        }
+        vTaskDelay(pdMS_TO_TICKS(80));
         board_.CutBatteryPower();
         vTaskDelay(pdMS_TO_TICKS(100));
+        // If USB power stays connected after cutting VBAT_LATCH, let OK wake the device back up.
+        rtc_gpio_pullup_en(ZECTRIX_BUTTON_OK);
+        rtc_gpio_pulldown_dis(ZECTRIX_BUTTON_OK);
+        vTaskDelay(pdMS_TO_TICKS(10));
+        if (gpio_get_level(ZECTRIX_BUTTON_OK) != 0) {
+            esp_sleep_enable_ext1_wakeup(1ULL << ZECTRIX_BUTTON_OK, ESP_EXT1_WAKEUP_ANY_LOW);
+        }
         esp_deep_sleep_start();
     }
 
