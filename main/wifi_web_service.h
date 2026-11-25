@@ -87,7 +87,7 @@ private:
     void RunAiTextWorker(uint32_t job_id, AppConfig cfg, std::string text);
     void RunAiTestWorker(uint32_t job_id, AppConfig cfg);
 
-    static bool ReadJsonBody(httpd_req_t* req, std::string* out);
+    static esp_err_t ReadJsonBody(httpd_req_t* req, std::string* out);
     static esp_err_t SendJson(httpd_req_t* req, const std::string& json);
     void NotifyUi(bool recipe = false, bool cook = false);
 

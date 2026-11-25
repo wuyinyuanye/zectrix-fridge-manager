@@ -307,19 +307,41 @@ void WifiWebService::StopHttpServer() {
     if (server_) { httpd_stop(server_); server_ = nullptr; }
 }
 
-bool WifiWebService::ReadJsonBody(httpd_req_t* req, std::string* out) {
-    if (req->content_len <= 0 || req->content_len > 16384) {
+esp_err_t WifiWebService::ReadJsonBody(httpd_req_t* req, std::string* out) {
+    constexpr size_t kMaxJsonBodyBytes = 16384;
+    if (req->content_len == 0) {
         *out = "{}";
-        return req->content_len == 0;
+        return ESP_OK;
     }
-    out->resize(static_cast<size_t>(req->content_len));
+    if (req->content_len > kMaxJsonBodyBytes) {
+        out->clear();
+        httpd_resp_set_status(req, "413 Payload Too Large");
+        httpd_resp_set_hdr(req, "Connection", "close");
+        SendJson(req, "{\"ok\":false,\"error\":\"请求体过大\"}");
+        // Returning ESP_FAIL instructs esp_http_server to close the socket so unread
+        // body bytes can never corrupt a subsequent keep-alive request.
+        return ESP_FAIL;
+    }
+    out->resize(req->content_len);
     size_t got = 0;
+    int timeouts = 0;
     while (got < out->size()) {
         const int r = httpd_req_recv(req, out->data() + got, out->size() - got);
-        if (r <= 0) return false;
+        if (r == HTTPD_SOCK_ERR_TIMEOUT) {
+            if (++timeouts <= 3) continue;
+            out->clear();
+            httpd_resp_set_status(req, "408 Request Timeout");
+            httpd_resp_set_hdr(req, "Connection", "close");
+            SendJson(req, "{\"ok\":false,\"error\":\"请求超时\"}");
+            return ESP_FAIL;
+        }
+        if (r <= 0) {
+            out->clear();
+            return ESP_FAIL;
+        }
         got += static_cast<size_t>(r);
     }
-    return true;
+    return ESP_OK;
 }
 
 esp_err_t WifiWebService::SendJson(httpd_req_t* req, const std::string& json) {
@@ -343,7 +365,7 @@ esp_err_t WifiWebService::HandleGetState(httpd_req_t* req) {
 esp_err_t WifiWebService::HandleItems(httpd_req_t* req) {
     auto* self = static_cast<WifiWebService*>(req->user_ctx);
     std::string body;
-    if (!ReadJsonBody(req, &body)) return SendJson(req, "{\"ok\":false}");
+    if (ReadJsonBody(req, &body) != ESP_OK) return ESP_FAIL;
     cJSON* root = cJSON_Parse(body.c_str());
     if (!root) return SendJson(req, "{\"ok\":false}");
     const std::string action = JStr(root, "action");
@@ -381,7 +403,7 @@ esp_err_t WifiWebService::HandleItems(httpd_req_t* req) {
 esp_err_t WifiWebService::HandleShopping(httpd_req_t* req) {
     auto* self = static_cast<WifiWebService*>(req->user_ctx);
     std::string body;
-    if (!ReadJsonBody(req, &body)) return SendJson(req, "{\"ok\":false}");
+    if (ReadJsonBody(req, &body) != ESP_OK) return ESP_FAIL;
     cJSON* root = cJSON_Parse(body.c_str());
     if (!root) return SendJson(req, "{\"ok\":false}");
     const std::string action = JStr(root, "action");
@@ -416,7 +438,7 @@ esp_err_t WifiWebService::HandleShopping(httpd_req_t* req) {
 esp_err_t WifiWebService::HandleTimers(httpd_req_t* req) {
     auto* self = static_cast<WifiWebService*>(req->user_ctx);
     std::string body;
-    if (!ReadJsonBody(req, &body)) return SendJson(req, "{\"ok\":false}");
+    if (ReadJsonBody(req, &body) != ESP_OK) return ESP_FAIL;
     cJSON* root = cJSON_Parse(body.c_str());
     if (!root) return SendJson(req, "{\"ok\":false}");
     const std::string action = JStr(root, "action");
@@ -435,7 +457,7 @@ esp_err_t WifiWebService::HandleTimers(httpd_req_t* req) {
 esp_err_t WifiWebService::HandleRecipes(httpd_req_t* req) {
     auto* self = static_cast<WifiWebService*>(req->user_ctx);
     std::string body;
-    if (!ReadJsonBody(req, &body)) return SendJson(req, "{\"ok\":false}");
+    if (ReadJsonBody(req, &body) != ESP_OK) return ESP_FAIL;
     cJSON* root = cJSON_Parse(body.c_str());
     if (!root) return SendJson(req, "{\"ok\":false}");
     const std::string action = JStr(root, "action");
@@ -454,7 +476,7 @@ esp_err_t WifiWebService::HandleRecipes(httpd_req_t* req) {
 esp_err_t WifiWebService::HandleConfig(httpd_req_t* req) {
     auto* self = static_cast<WifiWebService*>(req->user_ctx);
     std::string body;
-    if (!ReadJsonBody(req, &body)) return SendJson(req, "{\"ok\":false}");
+    if (ReadJsonBody(req, &body) != ESP_OK) return ESP_FAIL;
     cJSON* root = cJSON_Parse(body.c_str());
     if (!root) return SendJson(req, "{\"ok\":false}");
 
@@ -557,7 +579,7 @@ void WifiWebService::RunAiTestWorker(uint32_t job_id, AppConfig cfg) {
 esp_err_t WifiWebService::HandleAiText(httpd_req_t* req) {
     auto* self = static_cast<WifiWebService*>(req->user_ctx);
     std::string body;
-    if (!ReadJsonBody(req, &body)) return SendJson(req, "{\"ok\":false,\"error\":\"请求无效\"}");
+    if (ReadJsonBody(req, &body) != ESP_OK) return ESP_FAIL;
     cJSON* root = cJSON_Parse(body.c_str());
     if (!root) return SendJson(req, "{\"ok\":false,\"error\":\"JSON无效\"}");
     const std::string text = JStr(root, "text");
@@ -673,7 +695,7 @@ esp_err_t WifiWebService::HandleRefresh(httpd_req_t* req) {
 esp_err_t WifiWebService::HandlePower(httpd_req_t* req) {
     auto* self = static_cast<WifiWebService*>(req->user_ctx);
     std::string body;
-    if (!ReadJsonBody(req, &body)) return SendJson(req, "{\"ok\":false}");
+    if (ReadJsonBody(req, &body) != ESP_OK) return ESP_FAIL;
     cJSON* root = cJSON_Parse(body.c_str());
     if (!root) return SendJson(req, "{\"ok\":false}");
     const std::string action = JStr(root, "action");

@@ -180,7 +180,7 @@ esp_err_t ZectrixBoard::Init() {
     if (button_queue_ == nullptr) {
         return ESP_ERR_NO_MEM;
     }
-    if (xTaskCreate(ButtonTaskEntry, "zectrix_buttons", 3072, this, 5,
+    if (xTaskCreate(ButtonTaskEntry, "zectrix_buttons", 4096, this, 5,
                     &button_task_) != pdPASS) {
         button_task_ = nullptr;
         return ESP_ERR_NO_MEM;
