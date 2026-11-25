@@ -231,8 +231,8 @@ public:
         std::string last_timer_label_drawn;
         int last_timer_bucket = -1;
 
-        // Main loop: ZERO idle screen refreshes! Screen only updates on user input,
-        // explicit Web UI change, timer ring, or quiet timer-pill label change.
+        // Main loop: quiet partial status-strip refresh on timer tick or minute change while awake
+        // (zero full-screen flashes; once deep-sleep standby is entered, refreshing stops completely).
         while (true) {
             const int64_t now = NowMs();
             wifi_web_.Poll();
@@ -313,6 +313,17 @@ public:
             } else if (!any_active && !last_timer_label_drawn.empty()) {
                 last_timer_label_drawn.clear();
                 last_timer_bucket = -1;
+                last_clock_hm_drawn_.clear();
+            }
+
+            // While awake on interactive pages (before entering deep-sleep standby), quietly
+            // partial-refresh the top-right HH:MM clock whenever the minute changes (or SNTP syncs).
+            if (!any_ringing && !any_active && !wifi_web_.is_ap_mode()) {
+                const std::string hm_now = FridgeStore::NowHmString();
+                if (!hm_now.empty() && hm_now != last_clock_hm_drawn_) {
+                    last_clock_hm_drawn_ = hm_now;
+                    ui_.UpdateTimerPillOnly(BuildTopBar());
+                }
             }
 
             // Async refresh ONLY when user explicitly modifies data on Phone Web UI
@@ -526,6 +537,11 @@ private:
             force_full = true;
         }
         const UiTopBar bar = BuildTopBar();
+        if (!bar.ap_mode && bar.active_timer_label.empty()) {
+            last_clock_hm_drawn_ = bar.hm_time;
+        } else {
+            last_clock_hm_drawn_.clear();
+        }
         switch (tab_) {
             case FridgeTab::kFridge: {
                 int c_all = 0, c_exp = 0, c_fr = 0, c_fz = 0;
@@ -837,14 +853,14 @@ private:
                 if (move(&selected_, 4)) RenderCurrentTab(false);
             } else if (btn == ZectrixButton::kOk) {
                 if (selected_ == 0) {
-                    RunVoiceHelpPopup();
+                    RequestPowerOrConfirm(PowerAction::kSleep);
                 } else if (selected_ == 1) {
+                    RunVoiceHelpPopup();
+                } else if (selected_ == 2) {
                     wifi_web_.ReconnectStaOrAp(!wifi_web_.is_ap_mode(), true);
                     last_net_wifi_ = wifi_web_.is_wifi_connected();
                     last_net_ap_ = wifi_web_.is_ap_mode();
                     RenderCurrentTab(false);
-                } else if (selected_ == 2) {
-                    RequestPowerOrConfirm(PowerAction::kSleep);
                 } else {
                     RunPowerMenuPopup();
                 }
@@ -1511,6 +1527,7 @@ private:
     int64_t last_activity_ms_ = 0;
     int64_t last_nfc_sync_attempt_ms_ = 0;
     std::string last_nfc_url_;
+    std::string last_clock_hm_drawn_;
     std::atomic<bool> ui_dirty_{false};
     std::atomic<int> pending_tab_{-1};
 };

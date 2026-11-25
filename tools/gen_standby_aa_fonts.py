@@ -11,11 +11,11 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 OUT = os.path.join(ROOT, "main", "standby_aa_fonts.h")
 
 FONTS = [
-    ("kFontHelvThin68", "/System/Library/Fonts/HelveticaNeue.ttc", 12, 68, "0123456789:"),
-    ("kFontHelvLight82", "/System/Library/Fonts/HelveticaNeue.ttc", 12, 82, "0123456789:"),
-    ("kFontHelvLight30", "/System/Library/Fonts/HelveticaNeue.ttc", 7, 30, "0123456789%:/."),
+    ("kFontHelvThin68", "/System/Library/Fonts/HelveticaNeue.ttc", 12, 68, "0123456789:./-"),
+    ("kFontHelvLight82", "/System/Library/Fonts/HelveticaNeue.ttc", 12, 82, "0123456789:./-"),
+    ("kFontHelvLight30", "/System/Library/Fonts/HelveticaNeue.ttc", 7, 30, "0123456789%:/.-"),
     ("kFontHelvMed18", "/System/Library/Fonts/HelveticaNeue.ttc", 7, 19, "0123456789%"),
-    ("kFontNewYork82", "/System/Library/Fonts/NewYork.ttf", 0, 82, "0123456789"),
+    ("kFontNewYork82", "/System/Library/Fonts/NewYork.ttf", 0, 82, "0123456789-"),
 ]
 
 lines = [

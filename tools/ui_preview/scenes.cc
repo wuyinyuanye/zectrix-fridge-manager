@@ -115,7 +115,7 @@ int main(int argc, char** argv) {
     Shot("13_settings");
     UiTopBar bar_ap = bar; bar_ap.ap_mode = true; bar_ap.wifi_ok = false;
     Check(ui.RenderSettingsPage(bar_ap, cfg, "192.168.4.1", "WIFI:T:WPA;S:ZecTrix-Fridge;P:preview;;",
-                                "扫码连接热点", "demo2345", pwr, 1, true), "settings ap");
+                                "扫码连接热点", "demo2345", pwr, 2, true), "settings ap");
     Shot("14_settings_ap");
 
     Check(ui.RenderFridgePage(bar, all, fr, fz, items, 0, true), "base");

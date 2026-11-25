@@ -279,8 +279,8 @@ button.sm{padding:5px 10px;font-size:12px;border-radius:9px}
       </select>
       <div class="lbl">16 灰阶待机封面（小憩常亮海报）</div>
       <select id="c-style">
-        <option value="0">MUJI · 瑞士双栏呼吸感（极简）</option>
-        <option value="1">Apple · 极简大时钟桌搭（极简）</option>
+        <option value="0">MUJI · 瑞士双栏日历（极简）</option>
+        <option value="1">Apple · 极简大日历桌搭（极简）</option>
         <option value="2">Kindle · 单向历书页日历（极简）</option>
         <option value="3">原研哉 · 黑白撞色海报（极简）</option>
         <option value="4">温馨圆角卡片看板（卡片风配套）</option>

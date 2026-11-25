@@ -109,6 +109,9 @@ void DrawUrgencyDot1bpp(PixelCanvas& c, int cx, int cy, UrgencyLevel u, uint8_t 
 }
 
 struct ParsedDateParts {
+    std::string year_str;      // "2026" or ""
+    std::string month_2d;      // "11" or "--"
+    std::string day_2d;        // "24" or "--"
     std::string month_day_cn;  // "11月24日" or fallback
     std::string month_cn;      // "11月"
     std::string day_num;       // "24" or "--"
@@ -133,23 +136,29 @@ ParsedDateParts ParseStandbyDate(const std::string& date_str) {
     }
 
     if (m >= 1 && m <= 12 && d >= 1 && d <= 31) {
+        char mbuf[4], dbuf[4];
+        std::snprintf(mbuf, sizeof(mbuf), "%02d", m);
+        std::snprintf(dbuf, sizeof(dbuf), "%02d", d);
+        p.month_2d = mbuf;
+        p.day_2d = dbuf;
         p.month_cn = std::to_string(m) + "月";
         p.day_num = std::to_string(d);
         p.month_day_cn = p.month_cn + p.day_num + "日";
     } else {
+        p.month_2d = "--";
+        p.day_2d = "--";
         p.month_cn = "";
         p.day_num = "--";
         p.month_day_cn = date_str.empty() ? "极趣小冰箱" : date_str;
     }
 
-    std::string yr;
     const time_t now = std::time(nullptr);
     struct tm lt = {};
     localtime_r(&now, &lt);
-    if (lt.tm_year + 1900 >= 2025) yr = std::to_string(lt.tm_year + 1900);
+    if (lt.tm_year + 1900 >= 2025) p.year_str = std::to_string(lt.tm_year + 1900);
 
     if (!p.month_cn.empty()) {
-        if (!yr.empty()) p.header_line = yr + " · " + p.month_cn;
+        if (!p.year_str.empty()) p.header_line = p.year_str + " · " + p.month_cn;
         else p.header_line = p.month_cn;
         if (!p.weekday_full.empty()) p.header_line += " · " + p.weekday_full;
     } else {
@@ -561,28 +570,30 @@ esp_err_t FridgeUi::RenderStandby4bpp(const std::string& date_str,
 
     const ParsedDateParts dp = ParseStandbyDate(date_str);
     const std::string hm = SafeHm(hm_str);
-    const std::string hh = hm.substr(0, 2);
-    const std::string mm = hm.substr(3, 2);
+    const std::string upd_str = "更新 " + hm;
+    const std::string mm_dd_dot = dp.month_2d + "." + dp.day_2d;
+    const std::string mm_dd_slash = dp.month_2d + "/" + dp.day_2d;
     const std::string bp = std::to_string(battery_pct) + "%";
     const int style = std::clamp(standby_style, 0, 4);
 
     if (style == 0) {
-        // ---- Style 0: MUJI · 瑞士双栏呼吸感海报 ----
+        // ---- Style 0: MUJI · 瑞士双栏日历海报（大号月/日全天准确，小字标更新时间）----
         canvas_.FillRect(0, 0, 150, 300, 14);
         canvas_.VLine(150, 0, 300, 13);
 
-        const int w_hh = MeasureAa(standby_aa::kFontHelvThin68, hh, -2);
-        const int w_mm = MeasureAa(standby_aa::kFontHelvThin68, mm, -2);
-        DrawAaText(canvas_, standby_aa::kFontHelvThin68, (150 - w_hh) / 2, 26, hh, 1, -2);
-        DrawAaText(canvas_, standby_aa::kFontHelvThin68, (150 - w_mm) / 2, 92, mm, 4, -2);
+        const int w_mo = MeasureAa(standby_aa::kFontHelvThin68, dp.month_2d, -2);
+        const int w_dy = MeasureAa(standby_aa::kFontHelvThin68, dp.day_2d, -2);
+        DrawAaText(canvas_, standby_aa::kFontHelvThin68, (150 - w_mo) / 2, 22, dp.month_2d, 4, -2);
+        DrawAaText(canvas_, standby_aa::kFontHelvThin68, (150 - w_dy) / 2, 88, dp.day_2d, 1, -2);
 
-        canvas_.HLine(59, 174, 32, 10);
-        const int d1w = std::min(136, canvas_.MeasureText(dp.month_day_cn, 1));
-        canvas_.DrawText((150 - d1w) / 2, 188, dp.month_day_cn, 1, 2, 136);
-        if (!dp.weekday_full.empty()) {
-            canvas_.DrawText((150 - canvas_.MeasureText(dp.weekday_full, 1)) / 2, 210, dp.weekday_full, 1, 6);
-        }
+        canvas_.HLine(59, 170, 32, 10);
+        const std::string sub_top = dp.weekday_full.empty() ? dp.month_day_cn : dp.weekday_full;
+        canvas_.DrawText((150 - std::min(136, canvas_.MeasureText(sub_top, 1))) / 2, 182, sub_top, 1, 2, 136);
+        const std::string sub_yr = dp.year_str.empty() ? dp.month_day_cn : (dp.year_str + "年");
+        canvas_.DrawText((150 - std::min(136, canvas_.MeasureText(sub_yr, 1))) / 2, 204, sub_yr, 1, 7, 136);
 
+        // Honest quiet last-updated timestamp + minimal battery
+        canvas_.DrawText((150 - canvas_.MeasureText(upd_str, 1)) / 2, 238, upd_str, 1, 8);
         canvas_.DrawMinimalBattery(42, 266, battery_pct, charging, 6);
         canvas_.DrawText(70, 263, bp, 1, 6);
 
@@ -636,15 +647,15 @@ esp_err_t FridgeUi::RenderStandby4bpp(const std::string& date_str,
                          shop_a.empty() ? "已清空" : (shop_a + (pending > 1 ? "等" : "")),
                          1, 7, 64);
     } else if (style == 1) {
-        // ---- Style 1: Apple StandBy · 极简大时钟桌搭 ----
-        const std::string top_d = dp.weekday_full.empty()
-                                      ? dp.month_day_cn
-                                      : (dp.month_day_cn + " " + dp.weekday_full);
-        canvas_.DrawText(24, 16, top_d, 1, 6, 240);
-        canvas_.DrawText(344 - canvas_.MeasureText(bp, 1), 16, bp, 1, 6);
+        // ---- Style 1: Apple StandBy · 极简大日历桌搭（MM.DD 大数字全天准确）----
+        std::string top_d = dp.year_str.empty() ? "" : (dp.year_str + " · ");
+        top_d += dp.weekday_full.empty() ? dp.month_day_cn : dp.weekday_full;
+        canvas_.DrawText(24, 16, top_d, 1, 6, 172);
+        const std::string right_st = upd_str + "  " + bp;
+        canvas_.DrawText(344 - canvas_.MeasureText(right_st, 1), 16, right_st, 1, 7);
         canvas_.DrawMinimalBattery(352, 19, battery_pct, charging, 5);
 
-        DrawAaText(canvas_, standby_aa::kFontHelvLight82, 22, 46, hm, 1, -1, -6);
+        DrawAaText(canvas_, standby_aa::kFontHelvLight82, 22, 46, mm_dd_dot, 1, -1);
 
         const float ccx = 338.0f, ccy = 88.0f;
         canvas_.DrawAACircle4bpp(ccx, ccy, 36.0f, 14);
@@ -706,17 +717,13 @@ esp_err_t FridgeUi::RenderStandby4bpp(const std::string& date_str,
                                   : (100 * (static_cast<int>(all_items.size()) - exp_count)) /
                                         static_cast<int>(all_items.size());
 
-        canvas_.DrawText(24, 16, dp.header_line, 1, 6, 232);
-        canvas_.DrawText(316 - canvas_.MeasureText(hm, 1), 16, hm, 1, 3);
+        canvas_.DrawText(24, 16, dp.header_line, 1, 6, 200);
+        canvas_.DrawText(316 - canvas_.MeasureText(upd_str, 1), 16, upd_str, 1, 7);
         canvas_.DrawMinimalBattery(326, 19, battery_pct, charging, 6);
         canvas_.DrawText(354, 16, bp, 1, 7);
         canvas_.HLine(24, 40, 352, 12);
 
-        if (dp.day_num != "--") {
-            DrawAaText(canvas_, standby_aa::kFontNewYork82, 22, 58, dp.day_num, 1, -2);
-        } else {
-            DrawAaText(canvas_, standby_aa::kFontHelvThin68, 22, 62, hh, 1, -2);
-        }
+        DrawAaText(canvas_, standby_aa::kFontNewYork82, 22, 58, dp.day_num, 1, -2);
 
         canvas_.DrawText(132, 60, "今晚推荐", 1, 7);
         if (top_recipe != nullptr) {
@@ -775,14 +782,16 @@ esp_err_t FridgeUi::RenderStandby4bpp(const std::string& date_str,
         std::snprintf(foot, sizeof(foot), "按 OK 唤醒 · 明早 %02d:00 刷新", wake_hour);
         canvas_.DrawTextCentered(276, foot, 1, 10);
     } else if (style == 3) {
-        // ---- Style 3: 原研哉 · 高级黑白撞色美术馆海报 ----
+        // ---- Style 3: 原研哉 · 高级黑白撞色美术馆海报（MM.DD 大日期主角）----
         canvas_.FillRect(0, 0, 400, 104, 1);
-        DrawAaText(canvas_, standby_aa::kFontHelvThin68, 22, 19, hm, 15, -1, -5);
+        DrawAaText(canvas_, standby_aa::kFontHelvThin68, 22, 19, mm_dd_dot, 15, -1);
 
-        canvas_.DrawText(376 - canvas_.MeasureText(dp.month_day_cn, 1), 22, dp.month_day_cn, 1, 14);
-        if (!dp.weekday_full.empty()) {
-            canvas_.DrawText(376 - canvas_.MeasureText(dp.weekday_full, 1), 44, dp.weekday_full, 1, 10);
-        }
+        const std::string hd1 = dp.weekday_full.empty()
+                                    ? dp.month_day_cn
+                                    : (dp.year_str.empty() ? dp.weekday_full
+                                                           : (dp.year_str + " · " + dp.weekday_full));
+        canvas_.DrawText(376 - canvas_.MeasureText(hd1, 1), 22, hd1, 1, 14);
+        canvas_.DrawText(376 - canvas_.MeasureText(upd_str, 1), 44, upd_str, 1, 10);
         canvas_.DrawMinimalBattery(316, 72, battery_pct, charging, 12);
         canvas_.DrawText(344, 69, bp, 1, 11);
 
@@ -843,13 +852,14 @@ esp_err_t FridgeUi::RenderStandby4bpp(const std::string& date_str,
 
         card(10, 10, 380, 56);
         canvas_.DrawMascotPixel(18, 18, 2, exp_count > 0);
-        DrawAaText(canvas_, standby_aa::kFontHelvLight30, 68, 22, hm, 1, 0, -2);
+        DrawAaText(canvas_, standby_aa::kFontHelvLight30, 68, 22, mm_dd_slash, 1, -1);
         canvas_.VLine(152, 20, 36, 13);
-        canvas_.DrawText(164, 18, date_str, 1, 2, 166);
+        const std::string c_hdr = (dp.weekday_full.empty() ? "" : (dp.weekday_full + " · ")) + upd_str;
+        canvas_.DrawText(164, 18, c_hdr, 1, 3, 174);
         const std::string st_sub = exp_count > 0
                                        ? (std::to_string(exp_count) + " 样食材临期优先吃")
                                        : ("共 " + std::to_string(all_items.size()) + " 样 · 全部新鲜");
-        canvas_.DrawText(164, 39, st_sub, 1, 6, 166);
+        canvas_.DrawText(164, 39, st_sub, 1, 6, 174);
         canvas_.DrawMinimalBattery(355, 22, battery_pct, charging, 4);
         canvas_.DrawText(378 - canvas_.MeasureText(bp, 1), 39, bp, 1, 6);
 
@@ -1793,12 +1803,12 @@ esp_err_t FridgeUi::RenderSettingsPage(const UiTopBar& bar,
     }
 
     const std::string ctrls[4] = {
+        "立即小憩 (灰阶封面)",
         "语音说明 / 绑定码",
         bar.ap_mode ? "重连家庭Wi-Fi" : "开启AP配网热点",
-        "立即小憩 (灰阶封面)",
         "重启 / 清屏关机",
     };
-    const UiIcon icons[4] = {UiIcon::kMic, UiIcon::kWifi, UiIcon::kMoon, UiIcon::kPower};
+    const UiIcon icons[4] = {UiIcon::kMoon, UiIcon::kMic, UiIcon::kWifi, UiIcon::kPower};
     const int clamped = std::clamp(selected_idx, 0, 3);
     for (int i = 0; i < 4; ++i) {
         DrawButton(166, 110 + i * 38, 226, 32, ctrls[i], icons[i], true,
