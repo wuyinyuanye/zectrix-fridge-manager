@@ -17,6 +17,7 @@
 #include "freertos/task.h"
 #include "fridge_store.h"
 #include "fridge_ui.h"
+#include "nfc_shopping.h"
 #include "rtc_pcf8563.h"
 #include "wifi_web_service.h"
 #include "xiaozhi_client.h"
@@ -59,6 +60,74 @@ std::string TodayChineseDateWeekday() {
     return buf;
 }
 
+// Matches ZectrixNfc::WriteUriNdef() encoding so we can skip redundant EEPROM writes.
+std::vector<uint8_t> BuildExpectedUriNdef(const std::string& uri) {
+    uint8_t prefix_code = 0x00;
+    std::string suffix = uri;
+    if (uri.rfind("https://www.", 0) == 0) {
+        prefix_code = 0x02;
+        suffix = uri.substr(12);
+    } else if (uri.rfind("http://www.", 0) == 0) {
+        prefix_code = 0x01;
+        suffix = uri.substr(11);
+    } else if (uri.rfind("https://", 0) == 0) {
+        prefix_code = 0x04;
+        suffix = uri.substr(8);
+    } else if (uri.rfind("http://", 0) == 0) {
+        prefix_code = 0x03;
+        suffix = uri.substr(7);
+    }
+    const size_t payload_len = 1 + suffix.size();
+    std::vector<uint8_t> msg;
+    if (payload_len <= 0xFF) {
+        msg.reserve(4 + payload_len);
+        msg.push_back(0xD1);
+        msg.push_back(0x01);
+        msg.push_back(static_cast<uint8_t>(payload_len));
+    } else {
+        msg.reserve(7 + payload_len);
+        msg.push_back(0xC1);
+        msg.push_back(0x01);
+        const uint32_t plen = static_cast<uint32_t>(payload_len);
+        msg.push_back(static_cast<uint8_t>((plen >> 24) & 0xFF));
+        msg.push_back(static_cast<uint8_t>((plen >> 16) & 0xFF));
+        msg.push_back(static_cast<uint8_t>((plen >> 8) & 0xFF));
+        msg.push_back(static_cast<uint8_t>(plen & 0xFF));
+    }
+    msg.push_back('U');
+    msg.push_back(prefix_code);
+    msg.insert(msg.end(), suffix.begin(), suffix.end());
+    return msg;
+}
+
+// Offline plain-text QR fallback (fits QR Version <= 10 Low ECC = 271 bytes)
+std::string BuildOfflineShoppingQrText(const std::vector<ShoppingItem>& list, int* pending_out) {
+    std::vector<const ShoppingItem*> pending;
+    for (const auto& s : list) {
+        if (!s.checked) pending.push_back(&s);
+    }
+    if (pending_out) *pending_out = static_cast<int>(pending.size());
+    const bool use_all = pending.empty();
+    std::string out = "采购清单:\n";
+    constexpr size_t kMaxBytes = 235;
+    int shown = 0;
+    const size_t total = use_all ? list.size() : pending.size();
+    for (size_t i = 0; i < total; ++i) {
+        const ShoppingItem& s = use_all ? list[i] : *pending[i];
+        std::string line = "- " + s.name;
+        if (!s.qty.empty()) line += " " + s.qty;
+        line += "\n";
+        if (out.size() + line.size() > kMaxBytes) {
+            const int rest = static_cast<int>(total) - shown;
+            out += "...等" + std::to_string(rest) + "样";
+            break;
+        }
+        out += line;
+        shown++;
+    }
+    return out;
+}
+
 // Only include active-low RTC wake pins (OK, DOWN, PCF8563 RTC_INT) that are currently HIGH.
 // NEVER include CHARGE_DETECT_GPIO (GPIO2): when battery is full or charger IC pulses on USB,
 // GPIO2 floats/toggles LOW and causes instant self-wakeup out of Page 0 Deep Sleep!
@@ -83,7 +152,7 @@ public:
         ESP_ERROR_CHECK(board_.Init());
         board_.SetPowerLed(false);
 
-        // Keep NFC power off since UI no longer uses NFC (saves idle power!)
+        // Keep NFC powered off during idle; SyncShoppingToNfc() powers it briefly (~50ms) only on list change.
         if (board_.nfc() != nullptr) {
             board_.nfc()->PowerOff();
         }
@@ -99,6 +168,7 @@ public:
         if (FridgeStore::IsClockSynced()) {
             store_.ReconcileUnsyncedDates();
         }
+        SyncNfcShopUrlIfNeeded(NowMs(), true);
 
         const esp_sleep_wakeup_cause_t wake_cause = esp_sleep_get_wakeup_cause();
         const uint64_t ext1_status =
@@ -259,6 +329,9 @@ public:
                 RenderCurrentTab(false);
             }
 
+            // Keep NFC tag synced (custom static URL if configured, otherwise http://<current-IP>/#shop)
+            SyncNfcShopUrlIfNeeded(now, false);
+
             // On Page 5 only: update QR & IP ONCE when Wi-Fi finishes connecting or switches AP/STA
             const bool cur_wifi = wifi_web_.is_wifi_connected();
             const bool cur_ap = wifi_web_.is_ap_mode();
@@ -311,6 +384,14 @@ public:
                 continue;
             }
 
+            // Fast continuous page flip when holding DOWN inside multi-page lists
+            if (ev.button == ZectrixButton::kDown && ev.action == ZectrixButtonAction::kRepeat) {
+                HandleDownPageFlip();
+                // Drain any queued repeat so lifting finger stops immediately with zero overshoot
+                board_.DrainButtons();
+                continue;
+            }
+
             // Global: DOWN 3s long-press -> enter Page 0 16-gray standby sleep
             if (ev.button == ZectrixButton::kDown && ev.action == ZectrixButtonAction::kLongPress) {
                 RequestSleepOrConfirm(false);
@@ -338,7 +419,7 @@ public:
             bool requested_sleep = false;
             if (ev.button == ZectrixButton::kUp || ev.button == ZectrixButton::kDown) {
                 ZectrixButtonEvent next_ev;
-                while (board_.WaitButton(&next_ev, pdMS_TO_TICKS(90))) {
+                while (board_.WaitButton(&next_ev, pdMS_TO_TICKS(150))) {
                     if (next_ev.action == ZectrixButtonAction::kLongPress) {
                         if (next_ev.button == ZectrixButton::kDown) {
                             RequestSleepOrConfirm(false);
@@ -434,16 +515,19 @@ private:
     }
 
     void RenderCurrentTab(bool force_full) {
+        SyncNfcShopUrlIfNeeded(NowMs(), false);
         const UiTopBar bar = BuildTopBar();
         switch (tab_) {
             case FridgeTab::kFridge: {
                 int c_all = 0, c_exp = 0, c_fr = 0, c_fz = 0;
                 const auto items = store_.GetItemsFiltered(ZoneFilter::kAll, &c_all, &c_exp, &c_fr, &c_fz);
                 selected_ = items.empty() ? 0 : std::clamp(selected_, 0, static_cast<int>(items.size()) - 1);
+                board_.SetDownRepeatEnabled(!nav_focus_ && items.size() > FridgeUi::kFridgePageSize);
                 ui_.RenderFridgePage(bar, c_all, c_fr, c_fz, items, nav_focus_ ? -1 : selected_, force_full);
                 break;
             }
             case FridgeTab::kRecipe: {
+                board_.SetDownRepeatEnabled(false);
                 const auto recipes = store_.GetMatchedRecipesSorted(focus_ingredient_);
                 recipe_idx_ = recipes.empty() ? 0 : std::clamp(recipe_idx_, 0, static_cast<int>(recipes.size()) - 1);
                 selected_ = std::clamp(selected_, 0, 2);
@@ -451,6 +535,7 @@ private:
                 break;
             }
             case FridgeTab::kCook: {
+                board_.SetDownRepeatEnabled(false);
                 const auto recipes = store_.GetMatchedRecipesSorted(focus_ingredient_);
                 const RecipeMatchView* cur = nullptr;
                 if (!recipes.empty()) {
@@ -466,11 +551,14 @@ private:
             }
             case FridgeTab::kShopping: {
                 const auto list = store_.GetShoppingList();
-                selected_ = list.empty() ? 0 : std::clamp(selected_, 0, static_cast<int>(list.size()));
-                ui_.RenderShoppingPage(bar, list, nav_focus_ ? -1 : selected_, force_full);
+                selected_ = list.empty() ? 0 : std::clamp(selected_, 0, static_cast<int>(list.size()) + 1);
+                board_.SetDownRepeatEnabled(!nav_focus_ && list.size() > 4);
+                ui_.RenderShoppingPage(bar, list, nav_focus_ ? -1 : selected_, force_full,
+                                       board_.nfc() != nullptr);
                 break;
             }
             case FridgeTab::kSettings: {
+                board_.SetDownRepeatEnabled(false);
                 selected_ = std::clamp(selected_, 0, 3);
                 const auto cfg = store_.GetConfig();
                 const bool ap = wifi_web_.is_ap_mode();
@@ -536,6 +624,28 @@ private:
         nav_focus_ = true;
         selected_ = 0;
         RenderCurrentTab(false);
+    }
+
+    // Hold DOWN in multi-page lists: smoothly flip whole pages continuously while held
+    void HandleDownPageFlip() {
+        if (nav_focus_) return;
+        if (tab_ == FridgeTab::kFridge) {
+            constexpr int kPerPage = FridgeUi::kFridgePageSize;
+            const auto items = store_.GetItemsFiltered(ZoneFilter::kAll);
+            const int n = static_cast<int>(items.size());
+            if (n <= kPerPage) return;
+            const int total_pages = (n + kPerPage - 1) / kPerPage;
+            const int next_page = ((std::clamp(selected_, 0, n - 1) / kPerPage) + 1) % total_pages;
+            selected_ = next_page * kPerPage;
+            RenderCurrentTab(false);
+        } else if (tab_ == FridgeTab::kShopping) {
+            const auto list = store_.GetShoppingList();
+            const int n = static_cast<int>(list.size());
+            if (n <= 4) return;
+            const int total = n + 2;
+            selected_ = (selected_ + 4) % total;
+            RenderCurrentTab(false);
+        }
     }
 
     void HandleFlatClick(ZectrixButton btn, int steps = 1) {
@@ -678,14 +788,15 @@ private:
                 else RenderCurrentTab(false);
                 return;
             }
-            const int total = static_cast<int>(list.size()) + 1;
+            const int n = static_cast<int>(list.size());
+            const int total = n + 2;
             if (is_nav_key) {
                 if (move(&selected_, total)) RenderCurrentTab(false);
             } else if (btn == ZectrixButton::kOk) {
-                if (selected_ < static_cast<int>(list.size())) {
+                if (selected_ < n) {
                     store_.ToggleShoppingItem(list[selected_].id);
                     RenderCurrentTab(false);
-                } else {
+                } else if (selected_ == n) {
                     int skipped_full = 0;
                     const int moved = store_.CommitCheckedShoppingToFridge(&skipped_full);
                     if (moved > 0 && skipped_full == 0) {
@@ -704,6 +815,8 @@ private:
                         ShowBriefPopup(false, "", "请先用上下键选物品、按 OK 勾选已买项", false);
                     }
                     RenderCurrentTab(false);
+                } else {
+                    RunShoppingQrPopup(list);
                 }
             }
             return;
@@ -732,6 +845,7 @@ private:
 
     // Streamlined 3-action Item Popup (UP = ALWAYS close immediately!)
     void RunItemPopup(const FridgeItem& item) {
+        board_.SetDownRepeatEnabled(false);
         int act = 0;
         const bool has_local = store_.HasRecipeForIngredient(item.name);
         ui_.RenderItemPopup(item, act, has_local);
@@ -885,6 +999,75 @@ private:
                 ui_.RenderActivationPopup(ota.activation_code, status);
             }
         }
+        RenderCurrentTab(false);
+    }
+
+    void SyncNfcShopUrlIfNeeded(int64_t now_ms, bool force = false) {
+        ZectrixNfc* nfc = board_.nfc();
+        if (nfc == nullptr) return;
+        const AppConfig cfg = store_.GetConfig();
+        std::string target;
+        bool use_static_offline = false;
+        if (!cfg.nfc_shop_url.empty()) {
+            target = nfc_shopping::BuildNfcShoppingUrl(cfg.nfc_shop_url, store_.GetShoppingList(),
+                                                       nfc->GetUserDataCapacity());
+            use_static_offline = true;
+        } else if (wifi_web_.is_wifi_connected()) {
+            target = wifi_web_.shop_url();
+        }
+        if (target.empty() || (!force && target == last_nfc_url_)) return;
+        if (!force && last_nfc_sync_attempt_ms_ != 0 && (now_ms - last_nfc_sync_attempt_ms_) < 3000) {
+            return;
+        }
+        last_nfc_sync_attempt_ms_ = now_ms;
+
+        if (!nfc->PowerOn()) {
+            nfc->PowerOff();
+            return;
+        }
+        vTaskDelay(pdMS_TO_TICKS(15));
+
+        const std::vector<uint8_t> expected = BuildExpectedUriNdef(target);
+        std::vector<uint8_t> existing;
+        const bool already_matches = (!expected.empty() && nfc->ReadNdef(&existing) == ESP_OK &&
+                                      existing == expected);
+        if (already_matches) {
+            ESP_LOGI(kTag, "NFC shop URL already up-to-date: %s", target.c_str());
+            last_nfc_url_ = target;
+        } else {
+            esp_err_t werr = nfc->WriteUriNdef(target);
+            if (werr != ESP_OK) {
+                vTaskDelay(pdMS_TO_TICKS(60));
+                werr = nfc->WriteUriNdef(target);
+            }
+            ESP_LOGI(kTag, "NFC shop URL write (%s, %u bytes): %s",
+                     use_static_offline ? "offline-static" : "lan",
+                     static_cast<unsigned>(target.size()), esp_err_to_name(werr));
+            if (werr == ESP_OK) {
+                last_nfc_url_ = target;
+            }
+        }
+        nfc->PowerOff();
+    }
+
+    void RunShoppingQrPopup(const std::vector<ShoppingItem>& list) {
+        board_.SetDownRepeatEnabled(false);
+        const bool online = wifi_web_.is_wifi_connected();
+        int pending = 0;
+        const std::string offline_text = BuildOfflineShoppingQrText(list, &pending);
+        const std::string qr_payload = online ? wifi_web_.shop_url() : offline_text;
+        const bool has_nfc = (board_.nfc() != nullptr);
+        ui_.RenderShoppingQrPopup(qr_payload, online, has_nfc, wifi_web_.ip_address(),
+                                  pending > 0 ? pending : static_cast<int>(list.size()));
+        ZectrixButtonEvent ev;
+        while (board_.WaitButton(&ev, pdMS_TO_TICKS(45000))) {
+            if (ev.button == ZectrixButton::kDown && ev.action == ZectrixButtonAction::kLongPress) {
+                RequestSleepOrConfirm(false);
+                return;
+            }
+            if (ev.action == ZectrixButtonAction::kClick) break;
+        }
+        board_.DrainButtons();
         RenderCurrentTab(false);
     }
 
@@ -1176,9 +1359,11 @@ private:
         const auto matched = store_.GetMatchedRecipesSorted();
         const RecipeMatchView* top_rec = matched.empty() ? nullptr : &matched[0];
 
+        SyncNfcShopUrlIfNeeded(NowMs(), false);
         ui_.RenderStandby4bpp(TodayChineseDateWeekday(), FridgeStore::NowHmString(),
                               pwr.battery_valid ? pwr.battery_percent : 0, pwr.charge.charging,
-                              all_items, top_rec, store_.GetShoppingList(), cfg.wake_hour);
+                              all_items, top_rec, store_.GetShoppingList(), cfg.wake_hour,
+                              cfg.standby_style);
 
         if (board_.nfc() != nullptr) {
             board_.nfc()->PowerOff();
@@ -1314,6 +1499,8 @@ private:
     bool last_net_wifi_ = false;
     bool last_net_ap_ = false;
     int64_t last_activity_ms_ = 0;
+    int64_t last_nfc_sync_attempt_ms_ = 0;
+    std::string last_nfc_url_;
     std::atomic<bool> ui_dirty_{false};
     std::atomic<int> pending_tab_{-1};
 };

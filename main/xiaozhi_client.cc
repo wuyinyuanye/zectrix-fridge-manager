@@ -582,6 +582,7 @@ std::string XiaozhiClient::BuildToolsListJson() const {
 {"name":"fridge_set_expiry","description":"专门设置或修改冰箱已有食材的保质期天数/剩余天数(例如:牛奶还剩3天、酸奶保质期7天、把鸡蛋改成10天过期)，不改动原有数量和分区。","inputSchema":{"type":"object","properties":{"name":{"type":"string","description":"食材名称"},"days":{"type":"integer","description":"保质期剩余天数(0表示今天到期，3表示还剩3天)"}},"required":["name","days"]}},
 {"name":"fridge_remove_item","description":"食材吃完了或用完了，从冰箱库存中移除。","inputSchema":{"type":"object","properties":{"name":{"type":"string","description":"食材名称"}},"required":["name"]}},
 {"name":"fridge_add_shopping","description":"将缺的食材加入家庭采购清单。","inputSchema":{"type":"object","properties":{"name":{"type":"string","description":"采购食材名称"},"qty":{"type":"string","description":"数量，如1把"}},"required":["name"]}},
+{"name":"fridge_commit_shopping","description":"买菜回来了，把采购清单里的食材全部放进冰箱对应分区并清空采购单。当用户说买回来了、采购单都买齐了、全部加入冰箱时直接调用本工具且不传names；若用户明确只买回部分食材，可在names里列出买回的食材名。","inputSchema":{"type":"object","properties":{"names":{"type":"array","items":{"type":"string"},"description":"可选，仅买回部分食材时传入名称列表；全部买回来则不传或传空数组"}},"required":[]}},
 {"name":"fridge_start_timer","description":"启动厨房倒计时闹钟。","inputSchema":{"type":"object","properties":{"label":{"type":"string","description":"计时名称，如炖排骨"},"minutes":{"type":"integer","description":"分钟数"},"seconds":{"type":"integer","description":"秒数"}},"required":["minutes"]}},
 {"name":"fridge_stop_timers","description":"停止或取消全部正在运行的厨房倒计时。","inputSchema":{"type":"object","properties":{},"required":[]}},
 {"name":"fridge_set_recipe","description":"向墨水屏推送一道菜谱(3到4步，每步24字以内)。只能推送真实存在、大家熟知的经典家常菜，菜名、配料和做法遵循传统做法；可以优先挑能用上冰箱库存的菜，但绝不能为了凑库存把不相干的食材拼成一道菜或自创菜名(例如不要出现菠菜排骨汤)。冰箱里的几样食材若不适合同做一道菜，就只推荐其中一道正宗的菜。配料要按正宗做法完整列出，冰箱缺的也要列。","inputSchema":{"type":"object","properties":{"title":{"type":"string","description":"菜名"},"summary":{"type":"string","description":"简短卖点"},"time_min":{"type":"integer","description":"预计用时分钟"},"ingredients":{"type":"array","items":{"type":"object","properties":{"name":{"type":"string"},"amount":{"type":"string"}}}},"steps":{"type":"array","items":{"type":"object","properties":{"text":{"type":"string"},"timer_min":{"type":"integer"},"heat":{"type":"string"}}}}},"required":["title","steps"]}},
@@ -638,7 +639,7 @@ void XiaozhiClient::HandleMcpRequest(const void* payload_cjson) {
     }
 
     if (method == "tools/list") {
-        ESP_LOGI(kTag, "MCP tools/list -> 9 fridge tools");
+        ESP_LOGI(kTag, "MCP tools/list -> 10 fridge tools");
         cJSON* res = cJSON_CreateObject();
         cJSON* tools = cJSON_Parse(BuildToolsListJson().c_str());
         cJSON_AddItemToObject(res, "tools", tools ? tools : cJSON_CreateArray());
@@ -756,6 +757,48 @@ void XiaozhiClient::HandleMcpRequest(const void* payload_cjson) {
                     turn_data_changed_ = true;
                 } else {
                     tool_text = "采购清单已满(最多80样)，请先清理";
+                }
+            }
+        } else if (name == "fridge_commit_shopping") {
+            std::vector<std::string> filter_names;
+            if (const cJSON* na = args ? cJSON_GetObjectItemCaseSensitive(args, "names") : nullptr;
+                cJSON_IsArray(na)) {
+                cJSON* el = nullptr;
+                cJSON_ArrayForEach(el, na) {
+                    if (cJSON_IsString(el) && el->valuestring && el->valuestring[0] != '\0') {
+                        filter_names.emplace_back(el->valuestring);
+                    }
+                }
+            }
+            const auto cur_shop = store_->GetShoppingList();
+            if (cur_shop.empty()) {
+                tool_text = "采购清单目前是空的，没有待入库食材";
+            } else {
+                ensure_undo();
+                std::vector<std::string> moved_names;
+                int skipped_full = 0;
+                const int moved = store_->CommitAllShoppingToFridge(filter_names, &moved_names, &skipped_full);
+                if (moved > 0) {
+                    std::string joined;
+                    const size_t show_n = std::min<size_t>(moved_names.size(), 5);
+                    for (size_t i = 0; i < show_n; ++i) {
+                        if (i > 0) joined += "、";
+                        joined += moved_names[i];
+                    }
+                    if (moved_names.size() > show_n) {
+                        joined += " 等" + std::to_string(moved_names.size()) + "样";
+                    }
+                    tool_text = "已将采购单" + std::string(filter_names.empty() ? "全部 " : " ") +
+                                std::to_string(moved) + " 样放进冰箱：" + joined;
+                    if (skipped_full > 0) {
+                        tool_text += "（另有" + std::to_string(skipped_full) + "样因库存满80未移入）";
+                    }
+                    std::lock_guard<std::mutex> lock(mutex_);
+                    turn_data_changed_ = true;
+                } else if (skipped_full > 0) {
+                    tool_text = "冰箱库存已满(最多80样)，请先清理后再把采购单入库";
+                } else {
+                    tool_text = "采购清单里没有找到对应的食材";
                 }
             }
         } else if (name == "fridge_start_timer") {

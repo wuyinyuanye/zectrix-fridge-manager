@@ -51,8 +51,11 @@ int main(int argc, char** argv) {
 
     Check(ui.ShowBootSplash("正在连接 Wi-Fi..."), "boot"); Shot("00_boot");
     Check(ui.RenderStandby4bpp("11/24 周二", "18:42", 76, false, items,
-                               recipes.empty() ? nullptr : &recipes[0], shopping, 8), "standby");
+                               recipes.empty() ? nullptr : &recipes[0], shopping, 8, 0), "standby");
     Shot("01_standby_4bpp");
+    Check(ui.RenderStandby4bpp("11/24 周二", "18:42", 76, false, items,
+                               recipes.empty() ? nullptr : &recipes[0], shopping, 8, 1), "standby minimal");
+    Shot("01b_standby_minimal_4bpp");
 
     UiTopBar bar_menu = bar;
     bar_menu.nav_focus = true;
@@ -82,6 +85,15 @@ int main(int argc, char** argv) {
     Check(ui.RenderShoppingPage(bar, shopping, 1, true), "shopping"); Shot("11_shopping");
     Check(ui.RenderShoppingPage(bar, shopping, static_cast<int>(shopping.size()), true), "shopping commit");
     Shot("12_shopping_commit");
+    Check(ui.RenderShoppingPage(bar, shopping, static_cast<int>(shopping.size()) + 1, true), "shopping takeaway");
+    Shot("12b_shopping_takeaway");
+    Check(ui.RenderShoppingQrPopup("http://192.168.1.50/#shop", true, true, "192.168.1.50",
+                                   static_cast<int>(shopping.size())), "shopping qr online");
+    Shot("12c_shopping_qr_online");
+    Check(ui.RenderShoppingPage(bar, shopping, static_cast<int>(shopping.size()) + 1, true), "shopping base2");
+    Check(ui.RenderShoppingQrPopup("采购清单:\n- 鸡蛋 1盒\n- 小葱 1把", false, false, "192.168.4.1",
+                                   static_cast<int>(shopping.size())), "shopping qr offline");
+    Shot("12d_shopping_qr_offline");
 
     AppConfig cfg = store.GetConfig();
     cfg.wifi_ssid = "MyHome";  // never put real SSID into preview images
@@ -99,6 +111,9 @@ int main(int argc, char** argv) {
     Check(ui.RenderFridgePage(bar, all, fr, fz, items, 0, true), "base");
     Check(ui.RenderVoiceResultPopup(true, "放两盒牛奶五天过期", "已放入鲜牛奶 2盒 (冷藏 · 剩5天)\n已加采购单:小葱 1把", true), "voice ok");
     Shot("15_voice_ok");
+    Check(ui.RenderShoppingPage(bar, shopping, 0, true), "base");
+    Check(ui.RenderVoiceResultPopup(true, "买回来了，全部加入", "已将采购单全部 3 样放进冰箱：\n小香葱 1把、全麦面包 1袋、生抽酱油 1瓶", true), "voice commit");
+    Shot("15b_voice_commit_shopping");
     Check(ui.RenderFridgePage(bar, all, fr, fz, items, 0, true), "base");
     Check(ui.RenderVoiceResultPopup(false, "", "没听清，请靠近一点再说一次", false), "voice fail");
     Shot("16_voice_fail");

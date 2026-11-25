@@ -22,6 +22,9 @@
 #ifndef FRIDGE_DEFAULT_OTA_URL
 #define FRIDGE_DEFAULT_OTA_URL "https://api.tenclass.net/xiaozhi/ota/"
 #endif
+#ifndef FRIDGE_DEFAULT_NFC_SHOP_URL
+#define FRIDGE_DEFAULT_NFC_SHOP_URL ""
+#endif
 
 enum class ZoneFilter : int {
     kAll = 0,
@@ -120,8 +123,11 @@ struct AppConfig {
     std::string ota_url = FRIDGE_DEFAULT_OTA_URL;
     // Optional custom Bearer token (used when connecting directly to a custom ws:// / wss:// URL)
     std::string ws_token;
+    // Static offline shopping list page URL written into the 880B NFC tag (#<base64url> appended)
+    std::string nfc_shop_url = FRIDGE_DEFAULT_NFC_SHOP_URL;
     int sleep_minutes = 5;            // 0 = never auto-sleep on battery
     int wake_hour = 8;                // Daily RTC morning refresh hour
+    int standby_style = 0;            // 0 = 温馨手账看板, 1 = 极简大时钟桌搭
 };
 
 struct LocalFastAction {
@@ -193,6 +199,10 @@ public:
     bool ToggleShoppingItem(uint32_t id);
     bool RemoveShoppingItem(uint32_t id);
     int CommitCheckedShoppingToFridge(int* skipped_full_out = nullptr);
+    // Commit all shopping items (or only items matching `filter_names` when non-empty) into fridge.
+    int CommitAllShoppingToFridge(const std::vector<std::string>& filter_names = {},
+                                  std::vector<std::string>* moved_names_out = nullptr,
+                                  int* skipped_full_out = nullptr);
 
     // Kitchen timers (Page 3 & global top bar)
     std::vector<KitchenTimer> GetTimers();

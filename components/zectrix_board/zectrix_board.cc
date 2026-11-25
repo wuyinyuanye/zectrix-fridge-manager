@@ -23,6 +23,8 @@ constexpr TickType_t kButtonDebounce = pdMS_TO_TICKS(55);
 constexpr TickType_t kButtonCooldown = pdMS_TO_TICKS(80);
 constexpr TickType_t kOkLongPress = pdMS_TO_TICKS(350);   // Fast PTT hold trigger
 constexpr TickType_t kDownLongPress = pdMS_TO_TICKS(3000);
+constexpr TickType_t kDownRepeatDelay = pdMS_TO_TICKS(450);   // Hold DOWN = continuous page flip
+constexpr TickType_t kDownRepeatPeriod = pdMS_TO_TICKS(550);
 constexpr TickType_t kUpLongPress = pdMS_TO_TICKS(600);    // Hold UP = switch page
 constexpr adc_channel_t kBatteryAdcChannel = ADC_CHANNEL_3;
 
@@ -249,6 +251,7 @@ void ZectrixBoard::ButtonTask() {
                         (state.released_at == 0 || (now - state.released_at >= kButtonCooldown));
                     if (state.press_valid) {
                         state.pressed_at = now;
+                        state.last_repeat_at = 0;
                         state.long_sent = false;
                         if (ClickOnPress(definition.button)) {
                             const ZectrixButtonEvent event = {
@@ -271,15 +274,33 @@ void ZectrixBoard::ButtonTask() {
                 }
             }
 
-            if (state.press_valid && state.stable_level == 0 &&
-                !state.long_sent) {
-                const TickType_t threshold = LongPressTicks(definition.button);
-                if (threshold != portMAX_DELAY &&
-                    now - state.pressed_at >= threshold) {
-                    state.long_sent = true;
-                    const ZectrixButtonEvent event = {
-                        definition.button, ZectrixButtonAction::kLongPress};
-                    xQueueSend(button_queue_, &event, 0);
+            if (state.press_valid && state.stable_level == 0) {
+                if (definition.button == ZectrixButton::kDown &&
+                    down_repeat_enabled_.load(std::memory_order_acquire)) {
+                    if (!state.long_sent) {
+                        if (now - state.pressed_at >= kDownRepeatDelay) {
+                            state.long_sent = true;
+                            state.last_repeat_at = now;
+                            const ZectrixButtonEvent event = {
+                                definition.button, ZectrixButtonAction::kRepeat};
+                            xQueueSend(button_queue_, &event, 0);
+                        }
+                    } else if (state.last_repeat_at != 0 &&
+                               now - state.last_repeat_at >= kDownRepeatPeriod) {
+                        state.last_repeat_at = now;
+                        const ZectrixButtonEvent event = {
+                            definition.button, ZectrixButtonAction::kRepeat};
+                        xQueueSend(button_queue_, &event, 0);
+                    }
+                } else if (!state.long_sent) {
+                    const TickType_t threshold = LongPressTicks(definition.button);
+                    if (threshold != portMAX_DELAY &&
+                        now - state.pressed_at >= threshold) {
+                        state.long_sent = true;
+                        const ZectrixButtonEvent event = {
+                            definition.button, ZectrixButtonAction::kLongPress};
+                        xQueueSend(button_queue_, &event, 0);
+                    }
                 }
             }
         }

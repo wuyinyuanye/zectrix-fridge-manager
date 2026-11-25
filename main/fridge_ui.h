@@ -37,16 +37,18 @@ public:
     esp_err_t ClearDisplay();
     esp_err_t ShowBootSplash(const std::string& subtitle);
 
-    // Page 0: True 4bpp 16-level grayscale standby poster (ZERO NFC clutter, truthful dates)
+    // Page 0: True 4bpp 16-level grayscale standby poster (style 0 = 手账看板, 1 = 极简大时钟桌搭)
     esp_err_t RenderStandby4bpp(const std::string& date_str,
                                 const std::string& hm_str,
                                 int battery_pct, bool charging,
                                 const std::vector<FridgeItem>& all_items,
                                 const RecipeMatchView* top_recipe,
                                 const std::vector<ShoppingItem>& shopping,
-                                int wake_hour);
+                                int wake_hour,
+                                int standby_style = 0);
 
-    // Page 1: Fridge Inventory (clean 2x4 cards, NO filter bar trap, truthful storage age)
+    // Page 1: Fridge Inventory (Master-Detail Hero Focus Card + 5 Right Slim Cards)
+    static constexpr int kFridgePageSize = 5;
     esp_err_t RenderFridgePage(const UiTopBar& bar,
                                int cnt_all, int cnt_fr, int cnt_fz,
                                const std::vector<FridgeItem>& items,
@@ -81,11 +83,19 @@ public:
 
     esp_err_t RenderCookDonePopup(const RecipeMatchView& recipe, int choice_idx);
 
-    // Page 4: Shopping List (NO NFC clutter, selectable rows + bottom commit button)
+    // Page 4: Shopping List (selectable rows + commit & takeaway buttons)
     esp_err_t RenderShoppingPage(const UiTopBar& bar,
                                  const std::vector<ShoppingItem>& list,
                                  int selected_idx,
-                                 bool force_full);
+                                 bool force_full,
+                                 bool has_nfc = true);
+
+    // Takeaway QR modal from Page 4 (fallback for non-NFC batches & offline WeChat scan)
+    esp_err_t RenderShoppingQrPopup(const std::string& qr_payload,
+                                    bool online_mode,
+                                    bool has_nfc,
+                                    const std::string& ip,
+                                    int pending_count);
 
     // Page 5: Settings & QR (borderless QR/info; 4 unmistakable buttons, NO NFC)
     esp_err_t RenderSettingsPage(const UiTopBar& bar,

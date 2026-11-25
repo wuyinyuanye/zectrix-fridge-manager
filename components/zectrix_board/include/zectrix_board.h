@@ -2,6 +2,7 @@
 #define ZECTRIX_BOARD_H_
 
 #include <array>
+#include <atomic>
 #include <cstdint>
 #include <memory>
 
@@ -26,6 +27,7 @@ enum class ZectrixButton : uint8_t {
 enum class ZectrixButtonAction : uint8_t {
     kClick = 0,
     kLongPress,
+    kRepeat,
 };
 
 struct ZectrixButtonEvent {
@@ -49,6 +51,10 @@ public:
     bool WaitButton(ZectrixButtonEvent* event, TickType_t timeout);
     void DrainButtons();
     bool IsButtonPressed(ZectrixButton button) const;
+    // When enabled (multi-page lists), holding DOWN emits kRepeat instead of 3s sleep kLongPress.
+    void SetDownRepeatEnabled(bool enable) {
+        down_repeat_enabled_.store(enable, std::memory_order_release);
+    }
 
     RtcPcf8563* rtc() const { return rtc_.get(); }
     ZectrixNfc* nfc() const { return nfc_.get(); }
@@ -67,6 +73,7 @@ private:
         TickType_t sampled_at = 0;
         TickType_t pressed_at = 0;
         TickType_t released_at = 0;
+        TickType_t last_repeat_at = 0;
         bool armed = false;
         bool press_valid = false;
         bool long_sent = false;
@@ -89,6 +96,7 @@ private:
     std::unique_ptr<AudioCodec> audio_;
     ChargeStatus charge_status_;
     bool audio_started_ = false;
+    std::atomic<bool> down_repeat_enabled_{false};
 };
 
 #endif  // ZECTRIX_BOARD_H_

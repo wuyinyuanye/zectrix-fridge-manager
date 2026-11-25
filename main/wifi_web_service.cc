@@ -263,6 +263,10 @@ std::string WifiWebService::access_url() const {
     return "http://" + ip_address() + "/";
 }
 
+std::string WifiWebService::shop_url() const {
+    return "http://" + ip_address() + "/#shop";
+}
+
 std::string WifiWebService::ap_wifi_qr_payload() const {
     return std::string("WIFI:T:WPA;S:") + kApSsid + ";P:" + ap_pass_ + ";;";
 }
@@ -400,6 +404,8 @@ esp_err_t WifiWebService::HandleShopping(httpd_req_t* req) {
         self->store_->RemoveShoppingItem(id);
     } else if (action == "commit") {
         moved = self->store_->CommitCheckedShoppingToFridge(&skipped_full);
+    } else if (action == "commit_all") {
+        moved = self->store_->CommitAllShoppingToFridge({}, nullptr, &skipped_full);
     }
     cJSON_Delete(root);
     self->NotifyUi();
@@ -460,8 +466,12 @@ esp_err_t WifiWebService::HandleConfig(httpd_req_t* req) {
     if (!new_pass.empty()) cfg.wifi_pass = new_pass;
     cfg.sleep_minutes = std::clamp(JInt(root, "sleep_minutes", cfg.sleep_minutes), 0, 720);
     cfg.wake_hour = std::clamp(JInt(root, "wake_hour", cfg.wake_hour), 0, 23);
+    cfg.standby_style = std::clamp(JInt(root, "standby_style", cfg.standby_style), 0, 1);
     const std::string new_ota = JStr(root, "ota_url", cfg.ota_url.c_str());
     if (!new_ota.empty()) cfg.ota_url = new_ota;
+    if (cJSON_HasObjectItem(root, "nfc_shop_url")) {
+        cfg.nfc_shop_url = JStr(root, "nfc_shop_url");
+    }
     if (cJSON_HasObjectItem(root, "ws_token")) {
         const std::string tok = JStr(root, "ws_token");
         if (!tok.empty() || JInt(root, "clear_token", 0) != 0) cfg.ws_token = tok;

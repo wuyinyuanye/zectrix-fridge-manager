@@ -573,12 +573,16 @@ void FridgeStore::LoadConfigFromNvsLocked() {
     config_.wifi_pass = ReadNvsStr(h, "wifi_pass", config_.wifi_pass);
     config_.ota_url = ReadNvsStr(h, "ota_url", config_.ota_url);
     config_.ws_token = ReadNvsStr(h, "ws_token", config_.ws_token);
+    config_.nfc_shop_url = ReadNvsStr(h, "nfc_url", config_.nfc_shop_url);
     int32_t v = 0;
     if (nvs_get_i32(h, "sleep_min", &v) == ESP_OK) {
         config_.sleep_minutes = std::clamp<int>(v, 0, 720);
     }
     if (nvs_get_i32(h, "wake_hr", &v) == ESP_OK) {
         config_.wake_hour = std::clamp<int>(v, 0, 23);
+    }
+    if (nvs_get_i32(h, "stby_sty", &v) == ESP_OK) {
+        config_.standby_style = std::clamp<int>(v, 0, 1);
     }
     nvs_close(h);
 }
@@ -600,8 +604,10 @@ esp_err_t FridgeStore::SaveConfig(const AppConfig& cfg) {
     nvs_set_str(h, "wifi_pass", config_.wifi_pass.c_str());
     nvs_set_str(h, "ota_url", config_.ota_url.c_str());
     nvs_set_str(h, "ws_token", config_.ws_token.c_str());
+    nvs_set_str(h, "nfc_url", config_.nfc_shop_url.c_str());
     nvs_set_i32(h, "sleep_min", config_.sleep_minutes);
     nvs_set_i32(h, "wake_hr", config_.wake_hour);
+    nvs_set_i32(h, "stby_sty", config_.standby_style);
     err = nvs_commit(h);
     nvs_close(h);
     return err;
@@ -1448,6 +1454,69 @@ int FridgeStore::CommitCheckedShoppingToFridge(int* skipped_full_out) {
     return moved;
 }
 
+int FridgeStore::CommitAllShoppingToFridge(const std::vector<std::string>& filter_names,
+                                           std::vector<std::string>* moved_names_out,
+                                           int* skipped_full_out) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    const int32_t today = TodayDayNumber();
+    int moved = 0;
+    int skipped_full = 0;
+    std::vector<ShoppingItem> remain;
+
+    auto matches_filter = [&](const std::string& item_name) -> bool {
+        if (filter_names.empty()) return true;
+        for (const auto& q : filter_names) {
+            if (q.empty()) continue;
+            if (item_name == q || AreExactAliases(q, item_name) ||
+                item_name.find(q) != std::string::npos ||
+                q.find(item_name) != std::string::npos) {
+                return true;
+            }
+        }
+        return false;
+    };
+
+    for (const auto& sh : shopping_) {
+        if (matches_filter(sh.name)) {
+            const FoodHint h = food_catalog::Lookup(sh.name);
+            bool merged = false;
+            for (auto& it : items_) {
+                if (it.name == sh.name || AreExactAliases(sh.name, it.name)) {
+                    if (!sh.qty.empty()) {
+                        it.qty = ClampUtf8Bytes(MergeQuantityStrings(it.qty, sh.qty), kMaxQtyBytes);
+                    }
+                    it.added_day = today;
+                    it.storage_reminded = false;
+                    merged = true;
+                    break;
+                }
+            }
+            if (!merged) {
+                if (items_.size() >= kMaxItems) {
+                    skipped_full++;
+                    remain.push_back(sh);
+                    continue;
+                }
+                items_.push_back({next_id_++, sh.name, sh.qty.empty() ? "1份" : sh.qty,
+                                  h.zone, today, 0, ""});
+            }
+            if (moved_names_out) {
+                moved_names_out->push_back(
+                    sh.name + ((sh.qty.empty() || sh.qty == "1份") ? "" : (" " + sh.qty)));
+            }
+            moved++;
+        } else {
+            remain.push_back(sh);
+        }
+    }
+    if (skipped_full_out) *skipped_full_out = skipped_full;
+    if (moved > 0) {
+        shopping_.swap(remain);
+        SaveToSpiffsLocked();
+    }
+    return moved;
+}
+
 std::vector<KitchenTimer> FridgeStore::GetTimers() {
     std::lock_guard<std::mutex> lock(mutex_);
     return timers_;
@@ -1757,9 +1826,11 @@ std::string FridgeStore::ExportStateJson(const std::string& ip, bool wifi_ok, bo
     cJSON* cfg = cJSON_AddObjectToObject(root, "config");
     cJSON_AddStringToObject(cfg, "wifi_ssid", config_.wifi_ssid.c_str());
     cJSON_AddStringToObject(cfg, "ota_url", config_.ota_url.c_str());
+    cJSON_AddStringToObject(cfg, "nfc_shop_url", config_.nfc_shop_url.c_str());
     cJSON_AddBoolToObject(cfg, "has_ws_token", !config_.ws_token.empty());
     cJSON_AddNumberToObject(cfg, "sleep_minutes", config_.sleep_minutes);
     cJSON_AddNumberToObject(cfg, "wake_hour", config_.wake_hour);
+    cJSON_AddNumberToObject(cfg, "standby_style", config_.standby_style);
 
     char* printed = cJSON_PrintUnformatted(root);
     cJSON_Delete(root);

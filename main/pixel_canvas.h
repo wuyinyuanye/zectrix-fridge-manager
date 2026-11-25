@@ -15,6 +15,7 @@ enum class UiIcon : uint8_t {
     kMilk = 0, kLeaf, kMeat, kEgg, kFruit, kDrink, kSnow,
     kPot, kBasket, kClock, kMic, kWifi, kMoon, kPower, kBell,
     kFridge, kRefresh, kHeart, kCheck, kCross, kFlame, kSpark,
+    kSeafood, kRice, kTofu, kBread, kSauce, kRoot,
     kCount,
 };
 
@@ -91,6 +92,7 @@ public:
     void FillPatternRoundRectR(int x, int y, int w, int h, int r, UiFill fill);
     void FillPattern(int x, int y, int w, int h, UiFill fill);
     void DrawIcon16(UiIcon icon, int x, int y, uint8_t gray = 0);
+    void DrawIconScaled(UiIcon icon, int x, int y, int scale, uint8_t gray = 0);
     static UiIcon IconForFood(FoodIcon food);
     // Chunky pixel-art fridge mascot: 20x20 cells * scale (scale 2 == 40px)
     void DrawMascotPixel(int x, int y, int scale, bool worried);

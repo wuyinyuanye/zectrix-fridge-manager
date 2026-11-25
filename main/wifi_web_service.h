@@ -39,6 +39,7 @@ public:
     bool is_ap_mode() const { return ap_mode_.load(); }
     std::string ip_address() const;
     std::string access_url() const;
+    std::string shop_url() const;
     std::string ap_wifi_qr_payload() const;
     const std::string& ap_password() const { return ap_pass_; }
     PowerRequest TakePendingPowerRequest() {

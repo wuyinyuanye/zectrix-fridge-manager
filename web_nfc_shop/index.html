@@ -1,0 +1,251 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#141416">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<title>极趣小冰箱 · 逛超市清单</title>
+<style>
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  body {
+    margin: 0;
+    font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Helvetica Neue", sans-serif;
+    background: #f5f5f7;
+    color: #141416;
+    padding: 18px 16px 40px;
+    max-width: 520px;
+    margin-inline: auto;
+  }
+  .hdr {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 14px;
+  }
+  .title-wrap { display: flex; align-items: center; gap: 10px; }
+  .mascot {
+    width: 38px; height: 38px; border-radius: 10px; background: #fff;
+    border: 2px solid #141416; display: flex; align-items: center; justify-content: center;
+    font-size: 20px; flex-shrink: 0;
+  }
+  h1 { margin: 0; font-size: 20px; font-weight: 700; letter-spacing: -0.2px; }
+  .sub { font-size: 12px; color: #555; margin-top: 2px; }
+  .badge {
+    background: #141416; color: #fff; border-radius: 999px;
+    padding: 5px 12px; font-size: 13px; font-weight: 600; white-space: nowrap;
+  }
+  .card {
+    background: #fff; border: 2px solid #141416; border-radius: 16px;
+    box-shadow: 4px 4px 0 #d5d7dd; overflow: hidden; margin-bottom: 14px;
+  }
+  .item {
+    display: flex; align-items: center; gap: 14px;
+    padding: 15px 16px; border-bottom: 1px dashed #dcdfe6;
+    cursor: pointer; user-select: none; transition: background 0.12s;
+  }
+  .item:last-child { border-bottom: none; }
+  .item:active { background: #f2f3f5; }
+  .chk {
+    width: 24px; height: 24px; border-radius: 7px; border: 2px solid #141416;
+    display: flex; align-items: center; justify-content: center; flex-shrink: 0;
+    background: #fff; color: #fff; font-size: 15px; font-weight: 700;
+    transition: background 0.12s;
+  }
+  .item.done .chk { background: #141416; }
+  .item.done .name { text-decoration: line-through; color: #8c9099; }
+  .item.done .qty { color: #a4a8b0; }
+  .name { font-size: 17px; font-weight: 600; flex: 1; line-height: 1.3; }
+  .qty {
+    font-size: 14px; font-weight: 600; color: #333;
+    background: #f0f1f4; padding: 3px 9px; border-radius: 999px;
+  }
+  .empty {
+    padding: 36px 20px; text-align: center; color: #555; font-size: 15px; line-height: 1.7;
+  }
+  .actions { display: flex; gap: 10px; margin-bottom: 14px; }
+  button {
+    flex: 1; padding: 13px 12px; border-radius: 12px; font-size: 14px; font-weight: 600;
+    border: 2px solid #141416; cursor: pointer; transition: transform 0.08s;
+  }
+  button:active { transform: scale(0.98); }
+  .btn-primary { background: #141416; color: #fff; }
+  .btn-ghost { background: #fff; color: #141416; }
+  .tip {
+    background: #fff; border: 1.5px solid #dcdfe6; border-radius: 14px;
+    padding: 12px 14px; font-size: 13px; color: #333; line-height: 1.65;
+  }
+  .tip b { color: #000; }
+  .toast {
+    position: fixed; left: 50%; bottom: 26px; transform: translateX(-50%);
+    background: #141416; color: #fff; padding: 9px 18px; border-radius: 999px;
+    font-size: 13px; font-weight: 600; opacity: 0; pointer-events: none;
+    transition: opacity 0.2s;
+  }
+  .toast.show { opacity: 1; }
+</style>
+</head>
+<body>
+  <div class="hdr">
+    <div class="title-wrap">
+      <div class="mascot" aria-hidden="true">🧊</div>
+      <div>
+        <h1>逛超市清单</h1>
+        <div class="sub">NFC 一碰带走 · 本地离线解码</div>
+      </div>
+    </div>
+    <div class="badge" id="counter">0 / 0</div>
+  </div>
+
+  <div class="card" id="list"></div>
+
+  <div class="actions">
+    <button class="btn-primary" id="btn-copy">一键复制清单</button>
+    <button class="btn-ghost" id="btn-share">分享给家人</button>
+    <button class="btn-ghost" id="btn-reset" style="flex:0.65">重置</button>
+  </div>
+
+  <div class="tip">
+    <b>回家一键入库：</b>买完回到冰箱前，按住极趣小冰箱 <b>OK 键</b>说一句「<b>买回来了，全部加入</b>」，清单食材自动按分区放入冰箱。<br>
+    <span style="color:#666">隐私说明：清单内容保存在链接 # 后，仅在手机浏览器本地解码，不经过任何服务器。</span>
+  </div>
+
+  <div class="toast" id="toast">已复制</div>
+
+<script>
+(function () {
+  if ('serviceWorker' in navigator && location.protocol.startsWith('http')) {
+    navigator.serviceWorker.register('./sw.js').catch(function () {});
+  }
+
+  function decodeBase64Url(b64u) {
+    if (!b64u) return '';
+    let s = b64u.replace(/-/g, '+').replace(/_/g, '/');
+    while (s.length % 4) s += '=';
+    const bin = atob(s);
+    const bytes = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    return new TextDecoder('utf-8').decode(bytes);
+  }
+
+  function parseItemsFromHash() {
+    const rawHash = (location.hash || '').replace(/^#/, '').trim();
+    if (!rawHash) return { key: 'empty', items: [] };
+    let text = '';
+    try {
+      text = decodeBase64Url(rawHash);
+    } catch (e) {
+      try { text = decodeURIComponent(rawHash); } catch (e2) { text = rawHash; }
+    }
+    const items = text.split(/\r?\n/).map(function (line) {
+      const s = line.trim();
+      if (!s) return null;
+      const parts = s.split('\t');
+      return { name: parts[0].trim(), qty: (parts[1] || '').trim() };
+    }).filter(Boolean);
+    return { key: 'zf_shop_' + rawHash.slice(0, 48), items: items };
+  }
+
+  const parsed = parseItemsFromHash();
+  let checkedMap = {};
+  try {
+    checkedMap = JSON.parse(localStorage.getItem(parsed.key) || '{}') || {};
+  } catch (e) { checkedMap = {}; }
+
+  const listEl = document.getElementById('list');
+  const counterEl = document.getElementById('counter');
+  const toastEl = document.getElementById('toast');
+  let toastTimer = null;
+
+  function showToast(msg) {
+    toastEl.textContent = msg;
+    toastEl.classList.add('show');
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(function () { toastEl.classList.remove('show'); }, 1800);
+  }
+
+  function saveState() {
+    try { localStorage.setItem(parsed.key, JSON.stringify(checkedMap)); } catch (e) {}
+  }
+
+  function render() {
+    const items = parsed.items;
+    if (!items.length) {
+      counterEl.textContent = '已清空';
+      listEl.innerHTML = '<div class="empty">采购清单空空的~<br>按住极趣小冰箱 OK 键说「买点牛奶」即可加入清单</div>';
+      return;
+    }
+    let doneCount = 0;
+    listEl.innerHTML = '';
+    items.forEach(function (it, idx) {
+      const done = !!checkedMap[idx];
+      if (done) doneCount++;
+      const row = document.createElement('div');
+      row.className = 'item' + (done ? ' done' : '');
+      const chk = document.createElement('div');
+      chk.className = 'chk';
+      chk.textContent = done ? '✓' : '';
+      const nm = document.createElement('div');
+      nm.className = 'name';
+      nm.textContent = it.name;
+      row.appendChild(chk);
+      row.appendChild(nm);
+      if (it.qty) {
+        const q = document.createElement('div');
+        q.className = 'qty';
+        q.textContent = it.qty;
+        row.appendChild(q);
+      }
+      row.addEventListener('click', function () {
+        checkedMap[idx] = !checkedMap[idx];
+        saveState();
+        render();
+      });
+      listEl.appendChild(row);
+    });
+    counterEl.textContent = '已买 ' + doneCount + ' / ' + items.length;
+  }
+
+  function buildPlainText() {
+    if (!parsed.items.length) return '极趣小冰箱采购清单：当前为空';
+    const lines = parsed.items.map(function (it, idx) {
+      const mark = checkedMap[idx] ? '[✓] ' : '[ ] ';
+      return mark + it.name + (it.qty ? (' ' + it.qty) : '');
+    });
+    return '极趣小冰箱 · 采购清单：\n' + lines.join('\n');
+  }
+
+  document.getElementById('btn-copy').addEventListener('click', function () {
+    const txt = buildPlainText();
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(txt).then(function () { showToast('清单已复制，可直接粘贴到微信或备忘录'); });
+    } else {
+      const ta = document.createElement('textarea');
+      ta.value = txt; document.body.appendChild(ta); ta.select();
+      document.execCommand('copy'); document.body.removeChild(ta);
+      showToast('清单已复制');
+    }
+  });
+
+  document.getElementById('btn-share').addEventListener('click', function () {
+    const txt = buildPlainText();
+    if (navigator.share) {
+      navigator.share({ title: '极趣小冰箱 · 采购清单', text: txt }).catch(function () {});
+    } else {
+      document.getElementById('btn-copy').click();
+    }
+  });
+
+  document.getElementById('btn-reset').addEventListener('click', function () {
+    checkedMap = {};
+    saveState();
+    render();
+    showToast('已重置勾选状态');
+  });
+
+  window.addEventListener('hashchange', function () { location.reload(); });
+  render();
+})();
+</script>
+</body>
+</html>

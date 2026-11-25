@@ -11,6 +11,12 @@ enum class FoodIcon : uint8_t {
     kFruit,
     kDrink,
     kSnow,
+    kSeafood,
+    kRice,
+    kTofu,
+    kBread,
+    kSauce,
+    kRoot,
 };
 
 struct FoodHint {
@@ -39,12 +45,19 @@ inline bool IsPantryStaple(const std::string& name) {
 }
 
 inline FoodIcon GuessIcon(const std::string& name, const std::string& zone) {
-    if (zone == "冷冻") return FoodIcon::kSnow;
+    if (ContainsAny(name, {"冰淇淋", "雪糕", "冰棍", "冰块", "冰沙"})) return FoodIcon::kSnow;
+    if (ContainsAny(name, {"酱", "生抽", "老抽", "醋", "料酒", "蚝油", "沙拉", "豆瓣", "香油", "食用油"})) return FoodIcon::kSauce;
+    if (ContainsAny(name, {"豆腐", "豆干", "腐竹", "千张", "豆皮", "素鸡"})) return FoodIcon::kTofu;
+    if (ContainsAny(name, {"面包", "吐司", "蛋糕", "蛋挞", "馒头", "包子", "三明治", "可颂", "贝果", "饼"})) return FoodIcon::kBread;
     if (ContainsAny(name, {"奶", "酸奶", "芝士", "黄油", "奶油", "奶酪"})) return FoodIcon::kMilk;
     if (ContainsAny(name, {"蛋", "鹌鹑蛋", "皮蛋", "咸蛋"})) return FoodIcon::kEgg;
-    if (ContainsAny(name, {"肉", "排骨", "牛", "羊", "猪", "鸡", "鸭", "鹅", "鱼", "虾", "蟹", "贝", "火腿", "培根", "香肠", "丸"})) return FoodIcon::kMeat;
-    if (ContainsAny(name, {"果", "苹果", "梨", "橙", "橘", "柚", "莓", "葡萄", "西瓜", "哈密瓜", "桃", "李", "樱桃", "香蕉", "芒果", "猕猴桃", "柠檬", "圣女果", "番茄", "西红柿"})) return FoodIcon::kFruit;
-    if (ContainsAny(name, {"水", "茶", "可乐", "雪碧", "果汁", "咖啡", "啤酒", "酒", "豆浆", "椰汁", "饮料"})) return FoodIcon::kDrink;
+    if (ContainsAny(name, {"虾", "鱼", "蟹", "贝", "蛤", "鱿", "三文鱼", "海鲜", "鳗", "鲍", "螺"})) return FoodIcon::kSeafood;
+    if (ContainsAny(name, {"米饭", "剩饭", "粥", "面条", "拉面", "意面", "水饺", "饺子", "馄饨", "抄手", "汤圆", "年糕", "饭"})) return FoodIcon::kRice;
+    if (ContainsAny(name, {"肉", "排骨", "牛", "羊", "猪", "鸡", "鸭", "鹅", "火腿", "培根", "香肠", "腊肠", "丸"})) return FoodIcon::kMeat;
+    if (ContainsAny(name, {"水", "茶", "可乐", "雪碧", "果汁", "汁", "咖啡", "啤酒", "酒", "豆浆", "饮料", "汽水"})) return FoodIcon::kDrink;
+    if (ContainsAny(name, {"果", "苹果", "梨", "橙", "橘", "柚", "莓", "葡萄", "西瓜", "哈密瓜", "桃", "李", "樱桃", "香蕉", "芒果", "猕猴桃", "柠檬", "圣女果", "番茄", "西红柿", "蓝莓"})) return FoodIcon::kFruit;
+    if (ContainsAny(name, {"胡萝卜", "萝卜", "土豆", "马铃薯", "红薯", "地瓜", "山药", "芋头", "冬瓜", "南瓜", "苦瓜", "丝瓜", "黄瓜", "茄子", "莲藕", "藕", "玉米", "洋葱", "蘑菇", "香菇", "金针菇", "木耳"})) return FoodIcon::kRoot;
+    if (zone == "冷冻") return FoodIcon::kSnow;
     return FoodIcon::kLeaf;
 }
 

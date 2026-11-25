@@ -261,17 +261,19 @@ int PixelCanvas::MeasureText(const std::string& utf8, int scale) const {
 int PixelCanvas::DrawText(int x, int y, const std::string& utf8, int scale,
                           uint8_t gray, int max_width) {
     const LoadedFont& f = SelectFont(scale);
+    const int ell_w = MeasureText("..", scale);
+    const bool needs_ellipsis = (max_width > 0 && MeasureText(utf8, scale) > max_width);
+    const int limit = needs_ellipsis ? std::max(0, max_width - ell_w) : max_width;
     int cur = x;
     size_t idx = 0;
     uint32_t cp = 0;
-    const int ell_w = MeasureText("..", scale);
     while (DecodeUtf8(utf8, &idx, &cp)) {
         if (cp == '\n' || cp == '\r') continue;
         const uint16_t u16 = cp <= 0xFFFF ? static_cast<uint16_t>(cp) : '?';
         const FontEntry* g = FindGlyph(f, u16);
         const int gw = g ? g->adv_w : ((u16 < 0x80) ? (f.line_height / 2) : (f.line_height - 1));
-        if (max_width > 0 && (cur - x) + gw > max_width) {
-            if (max_width >= ell_w) DrawText(cur, y, "..", scale, gray, 0);
+        if (needs_ellipsis && (cur - x) + gw > limit) {
+            if (max_width >= ell_w) cur += DrawText(cur, y, "..", scale, gray, 0);
             break;
         }
         cur += DrawCodepoint(cur, y, u16, scale, gray);
@@ -378,6 +380,9 @@ void PixelCanvas::DrawFoodIcon(FoodIcon icon, int x, int y, uint8_t gray) {
         case FoodIcon::kDrink:
             Rect(x + 2, y + 3, 7, 8, gray);
             Pixel(x + 6, y + 2, gray); Pixel(x + 7, y + 1, gray); Pixel(x + 8, y, gray);
+            break;
+        default:
+            Circle(x + 5, y + 5, 4, gray, false);
             break;
     }
 }
@@ -559,10 +564,15 @@ uint8_t FillGrayAt(UiFill fill, int x, int y, bool four_bpp) {
             if (four_bpp) return 9;
             return ((x + y) & 1) ? 0 : 15;
         case UiFill::kGingham: {
+            if (four_bpp) {
+                constexpr int kCell4 = 10;
+                const bool bx = ((x / kCell4) & 1) != 0;
+                const bool by = ((y / kCell4) & 1) != 0;
+                return (bx && by) ? 13 : ((bx || by) ? 14 : 15);
+            }
             constexpr int kCell = 6;
             const bool band_x = ((x / kCell) & 1) != 0;
             const bool band_y = ((y / kCell) & 1) != 0;
-            if (four_bpp) return (band_x && band_y) ? 10 : ((band_x || band_y) ? 13 : 15);
             if (band_x && band_y) return ((x + y) & 1) ? 0 : 15;              // 50% where stripes cross
             if (band_x || band_y) return ((x & 1) == 0 && (y & 1) == 0) ? 0 : 15;  // 25% single stripe
             return 15;
@@ -995,6 +1005,114 @@ constexpr const char* kIcons[static_cast<int>(UiIcon::kCount)][16] = {
         "................",
         "................",
     },
+    {   // kSeafood (cute fish)
+        "................",
+        "................",
+        ".....###........",
+        "...##...####....",
+        "..#.........#..#",
+        ".#..##..#....###",
+        "#...##...#...##.",
+        "#........#..##..",
+        "#........#...##.",
+        ".#......#....###",
+        "..#.........#..#",
+        "...##...####....",
+        ".....###........",
+        "................",
+        "................",
+        "................",
+    },
+    {   // kRice (steaming bowl)
+        "................",
+        ".....#....#.....",
+        "....#....#......",
+        ".....#....#.....",
+        "................",
+        "....########....",
+        "..##........##..",
+        ".##############.",
+        ".#............#.",
+        ".#............#.",
+        "..#..........#..",
+        "...#........#...",
+        "....########....",
+        "....#......#....",
+        "....########....",
+        "................",
+    },
+    {   // kTofu (3D isometric tofu block)
+        "................",
+        "................",
+        "......####......",
+        "....##....##....",
+        "..##........##..",
+        ".#............#.",
+        ".###........###.",
+        ".#..##....##..#.",
+        ".#....####....#.",
+        ".#.....##.....#.",
+        ".#.....##.....#.",
+        "..##...##...##..",
+        "....##.##.##....",
+        "......####......",
+        "................",
+        "................",
+    },
+    {   // kBread (sliced toast loaf)
+        "................",
+        "................",
+        "...##########...",
+        ".##..........##.",
+        "#..............#",
+        "#..............#",
+        ".##..........##.",
+        "..#..........#..",
+        "..#..#....#..#..",
+        "..#..........#..",
+        "..#...####...#..",
+        "..#..........#..",
+        "..#..........#..",
+        "..############..",
+        "................",
+        "................",
+    },
+    {   // kSauce (condiment bottle)
+        "................",
+        ".....######.....",
+        ".....#....#.....",
+        "......####......",
+        "......#..#......",
+        ".....#....#.....",
+        "....#......#....",
+        "...#........#...",
+        "...#.######.#...",
+        "...#.#....#.#...",
+        "...#.#....#.#...",
+        "...#.######.#...",
+        "...#........#...",
+        "...#........#...",
+        "....########....",
+        "................",
+    },
+    {   // kRoot (carrot / root veg)
+        "................",
+        "..........#.#...",
+        ".........#.#.#..",
+        "..........###...",
+        "........###.....",
+        ".......#...#....",
+        "......#..#..#...",
+        ".....#......#...",
+        "....#..#...#....",
+        "...#......#.....",
+        "..#..#...#......",
+        ".#......#.......",
+        ".#.....#........",
+        ".#...##.........",
+        "..###...........",
+        "................",
+    },
 };
 
 // Mascot pixel art (20x20). '#' outline, 'c' blush, 'w' eye shine, 's' ground shadow,
@@ -1080,6 +1198,22 @@ void PixelCanvas::DrawIcon16(UiIcon icon, int x, int y, uint8_t gray) {
     }
 }
 
+void PixelCanvas::DrawIconScaled(UiIcon icon, int x, int y, int scale, uint8_t gray) {
+    scale = std::max(1, scale);
+    if (scale == 1) {
+        DrawIcon16(icon, x, y, gray);
+        return;
+    }
+    const int idx = static_cast<int>(icon);
+    if (idx < 0 || idx >= static_cast<int>(UiIcon::kCount)) return;
+    for (int ry = 0; ry < 16; ++ry) {
+        const char* row = kIcons[idx][ry];
+        for (int rx = 0; rx < 16 && row[rx] != '\0'; ++rx) {
+            if (row[rx] == '#') FillRect(x + rx * scale, y + ry * scale, scale, scale, gray);
+        }
+    }
+}
+
 UiIcon PixelCanvas::IconForFood(FoodIcon food) {
     switch (food) {
         case FoodIcon::kMilk: return UiIcon::kMilk;
@@ -1089,6 +1223,12 @@ UiIcon PixelCanvas::IconForFood(FoodIcon food) {
         case FoodIcon::kFruit: return UiIcon::kFruit;
         case FoodIcon::kDrink: return UiIcon::kDrink;
         case FoodIcon::kSnow: return UiIcon::kSnow;
+        case FoodIcon::kSeafood: return UiIcon::kSeafood;
+        case FoodIcon::kRice: return UiIcon::kRice;
+        case FoodIcon::kTofu: return UiIcon::kTofu;
+        case FoodIcon::kBread: return UiIcon::kBread;
+        case FoodIcon::kSauce: return UiIcon::kSauce;
+        case FoodIcon::kRoot: return UiIcon::kRoot;
     }
     return UiIcon::kLeaf;
 }
@@ -1106,11 +1246,19 @@ void PixelCanvas::DrawMascotPixel(int x, int y, int scale, bool worried) {
                     const int py = y + ry * scale + sy;
                     uint8_t g = 15;
                     switch (c) {
-                        case '#': g = 0; break;
+                        case '#': g = mode_4bpp_ ? 1 : 0; break;
                         case 'w': g = 15; break;
-                        case '.': g = mode_4bpp_ ? 14 : 15; break;
-                        case 'c': g = mode_4bpp_ ? 10 : (((px + py) & 1) ? 0 : 15); break;
-                        case 's': g = mode_4bpp_ ? 12 : (((px & 1) == 0 && (py & 1) == 0) ? 0 : 15); break;
+                        case '.':
+                            if (mode_4bpp_) {
+                                // Subtle 3D two-door fridge shading in 16-gray mode
+                                if (ry >= 12) g = (rx >= 16) ? 12 : 13;
+                                else g = (rx >= 17) ? 14 : 15;
+                            } else {
+                                g = 15;
+                            }
+                            break;
+                        case 'c': g = mode_4bpp_ ? 11 : (((px + py) & 1) ? 0 : 15); break;
+                        case 's': g = mode_4bpp_ ? 11 : (((px & 1) == 0 && (py & 1) == 0) ? 0 : 15); break;
                         default: break;
                     }
                     Pixel(px, py, g);
