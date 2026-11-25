@@ -15,8 +15,8 @@
 
 namespace {
 
-constexpr int kMaxPartialBeforeFull = 15;
-constexpr int kMaxPillPartialBeforeFull = 30;
+constexpr int kMaxPartialBeforeFull = 6;
+constexpr int kMaxPillPartialBeforeFull = 5;
 
 // Region owned by the timer-pill partial refresh (must match DrawStatusArea's footprint)
 constexpr int kStatusX = 288;
@@ -482,7 +482,7 @@ void FridgeUi::DrawKeyLegend(const std::string& nav_label, const std::string& ok
 esp_err_t FridgeUi::UpdateTimerPillOnly(const UiTopBar& bar) {
     canvas_.SetMode4bpp(false);
     DrawStatusArea(bar);
-    // Periodically clear ghosting on very long stews (every 30 pill ticks ~30 min)
+    // Periodically clear ghosting from repeated status-bar partial refreshes
     if (++pill_partial_count_ >= kMaxPillPartialBeforeFull) {
         return Flush1bpp(true);
     }
@@ -577,180 +577,187 @@ esp_err_t FridgeUi::RenderStandby4bpp(const std::string& date_str,
     const int style = std::clamp(standby_style, 0, 4);
 
     if (style == 0) {
-        // ---- Style 0: MUJI · 瑞士双栏日历海报（大号月/日全天准确，小字标更新时间）----
+        // ---- Style 0: MUJI · 瑞士双栏日历海报（均衡黑白灰层级，大日期 + 清晰库存为主角）----
         canvas_.FillRect(0, 0, 150, 300, 14);
-        canvas_.VLine(150, 0, 300, 13);
+        canvas_.VLine(150, 0, 300, 12);
 
         const int w_mo = MeasureAa(standby_aa::kFontHelvThin68, dp.month_2d, -2);
         const int w_dy = MeasureAa(standby_aa::kFontHelvThin68, dp.day_2d, -2);
-        DrawAaText(canvas_, standby_aa::kFontHelvThin68, (150 - w_mo) / 2, 22, dp.month_2d, 4, -2);
-        DrawAaText(canvas_, standby_aa::kFontHelvThin68, (150 - w_dy) / 2, 88, dp.day_2d, 1, -2);
+        DrawAaText(canvas_, standby_aa::kFontHelvThin68, (150 - w_mo) / 2, 22, dp.month_2d, 2, -2);
+        DrawAaText(canvas_, standby_aa::kFontHelvThin68, (150 - w_dy) / 2, 88, dp.day_2d, 0, -2);
 
-        canvas_.HLine(59, 170, 32, 10);
+        canvas_.HLine(59, 170, 32, 8);
         const std::string sub_top = dp.weekday_full.empty() ? dp.month_day_cn : dp.weekday_full;
-        canvas_.DrawText((150 - std::min(136, canvas_.MeasureText(sub_top, 1))) / 2, 182, sub_top, 1, 2, 136);
+        canvas_.DrawText((150 - std::min(136, canvas_.MeasureText(sub_top, 1))) / 2, 182, sub_top, 1, 0, 136);
         const std::string sub_yr = dp.year_str.empty() ? dp.month_day_cn : (dp.year_str + "年");
-        canvas_.DrawText((150 - std::min(136, canvas_.MeasureText(sub_yr, 1))) / 2, 204, sub_yr, 1, 7, 136);
+        canvas_.DrawText((150 - std::min(136, canvas_.MeasureText(sub_yr, 1))) / 2, 204, sub_yr, 1, 4, 136);
 
-        // Honest quiet last-updated timestamp + minimal battery
-        canvas_.DrawText((150 - canvas_.MeasureText(upd_str, 1)) / 2, 238, upd_str, 1, 8);
-        canvas_.DrawMinimalBattery(42, 266, battery_pct, charging, 6);
-        canvas_.DrawText(70, 263, bp, 1, 6);
+        // Quiet honest last-updated timestamp + minimal battery
+        canvas_.DrawText((150 - canvas_.MeasureText(upd_str, 1)) / 2, 238, upd_str, 1, 5);
+        canvas_.DrawMinimalBattery(42, 266, battery_pct, charging, 3);
+        canvas_.DrawText(70, 263, bp, 1, 3);
 
-        // Right editorial column
-        canvas_.DrawText(172, 20, "优先食用", 1, 7);
+        // Right editorial column: crisp black fridge inventory is the primary hero
+        canvas_.DrawText(172, 20, "优先食用", 1, 3);
         std::string meta = "共" + std::to_string(all_items.size()) + "样";
         if (exp_count > 0) meta += " · " + std::to_string(exp_count) + "临期";
-        canvas_.DrawText(380 - canvas_.MeasureText(meta, 1), 20, meta, 1, 6);
-        canvas_.HLine(172, 44, 208, 13);
+        canvas_.DrawText(380 - canvas_.MeasureText(meta, 1), 20, meta, 1, 3);
+        canvas_.HLine(172, 44, 208, 11);
 
         if (all_items.empty()) {
-            canvas_.DrawText(172, 114, "冰箱空空的 · 按 OK 唤醒记录", 1, 7, 208);
+            canvas_.DrawText(172, 114, "冰箱空空的 · 按 OK 唤醒记录", 1, 4, 208);
         } else {
             const int show = std::min<int>(4, static_cast<int>(all_items.size()));
             for (int i = 0; i < show; ++i) {
                 const auto& it = all_items[i];
                 const int y = 56 + i * 36;
-                if (i > 0) canvas_.HLine(172, y - 6, 208, 14);
+                if (i > 0) canvas_.HLine(172, y - 6, 208, 13);
                 UrgencyLevel urg = UrgencyLevel::kNone;
                 const std::string tag = FormatItemDateTag(it, today, &urg);
                 DrawUrgencyDot4bpp(canvas_, 178.0f, y + 9.0f, urg);
-                canvas_.DrawText(190, y, it.name, 1, urg == UrgencyLevel::kNone ? 3 : 0, 82);
-                canvas_.DrawText(272, y, it.qty, 1, 8, 38);
+                canvas_.DrawText(190, y, it.name, 1, 0, 82);
+                canvas_.DrawText(272, y, it.qty, 1, 4, 38);
                 const int tw = canvas_.MeasureText(tag, 1);
                 if (urg == UrgencyLevel::kCritical) {
                     canvas_.DrawAARoundRect4bpp(380 - tw - 12, y - 2, tw + 12, 21, 10.5f, 13);
                     canvas_.DrawText(380 - tw - 6, y, tag, 1, 0);
                 } else {
-                    canvas_.DrawText(380 - tw, y, tag, 1, urg == UrgencyLevel::kSoon ? 3 : 8);
+                    canvas_.DrawText(380 - tw, y, tag, 1, urg == UrgencyLevel::kSoon ? 1 : 4);
                 }
             }
         }
 
-        canvas_.HLine(172, 204, 208, 12);
-        canvas_.DrawText(172, 214, "今晚推荐", 1, 7);
+        // Bottom secondary companions (harmonized 17px typography — never overpowers inventory!)
+        canvas_.HLine(172, 204, 208, 11);
+        canvas_.DrawText(172, 214, "今晚推荐", 1, 4);
         if (top_recipe != nullptr) {
-            canvas_.DrawText(172, 234, top_recipe->recipe.title, 2, 1, 126);
-            canvas_.DrawAARoundRect4bpp(172, 273, 96, 3, 1.5f, 13);
+            canvas_.DrawText(172, 236, top_recipe->recipe.title, 1, 0, 126);
+            const std::string rmeta = "匹配" + std::to_string(top_recipe->match_pct) + "% · " +
+                                      std::to_string(top_recipe->recipe.time_min) + "分";
+            canvas_.DrawText(172, 258, rmeta, 1, 4, 126);
+            canvas_.DrawAARoundRect4bpp(172, 279, 96, 3, 1.5f, 13);
             const float fw = std::max(8.0f, 96.0f * std::clamp(top_recipe->match_pct, 0, 100) / 100.0f);
-            canvas_.DrawAARoundRect4bpp(172, 273, fw, 3, 1.5f, 3);
+            canvas_.DrawAARoundRect4bpp(172, 279, fw, 3, 1.5f, 3);
         } else {
-            canvas_.DrawText(172, 240, "暂无食谱", 1, 7);
+            canvas_.DrawText(172, 238, "暂无食谱", 1, 4);
         }
 
-        canvas_.VLine(306, 216, 62, 13);
-        canvas_.DrawText(318, 214, "待买", 1, 7);
+        canvas_.VLine(306, 216, 66, 12);
+        canvas_.DrawText(318, 214, "待买", 1, 4);
         const std::string pnum = std::to_string(pending);
-        DrawAaText(canvas_, standby_aa::kFontHelvLight30, 318, 236, pnum, 1);
-        canvas_.DrawText(318 + MeasureAa(standby_aa::kFontHelvLight30, pnum) + 5, 245, "样", 1, 6);
-        canvas_.DrawText(318, 267,
+        DrawAaText(canvas_, standby_aa::kFontHelvLight30, 318, 234, pnum, 0);
+        canvas_.DrawText(318 + MeasureAa(standby_aa::kFontHelvLight30, pnum) + 5, 243, "样", 1, 3);
+        canvas_.DrawText(318, 265,
                          shop_a.empty() ? "已清空" : (shop_a + (pending > 1 ? "等" : "")),
-                         1, 7, 64);
+                         1, 4, 64);
     } else if (style == 1) {
-        // ---- Style 1: Apple StandBy · 极简大日历桌搭（MM.DD 大数字全天准确）----
+        // ---- Style 1: Apple StandBy · 极简大日历桌搭（均衡黑白灰层级）----
         std::string top_d = dp.year_str.empty() ? "" : (dp.year_str + " · ");
         top_d += dp.weekday_full.empty() ? dp.month_day_cn : dp.weekday_full;
-        canvas_.DrawText(24, 16, top_d, 1, 6, 172);
+        canvas_.DrawText(24, 16, top_d, 1, 3, 172);
         const std::string right_st = upd_str + "  " + bp;
-        canvas_.DrawText(344 - canvas_.MeasureText(right_st, 1), 16, right_st, 1, 7);
-        canvas_.DrawMinimalBattery(352, 19, battery_pct, charging, 5);
+        canvas_.DrawText(344 - canvas_.MeasureText(right_st, 1), 16, right_st, 1, 4);
+        canvas_.DrawMinimalBattery(352, 19, battery_pct, charging, 3);
 
-        DrawAaText(canvas_, standby_aa::kFontHelvLight82, 22, 46, mm_dd_dot, 1, -1);
+        DrawAaText(canvas_, standby_aa::kFontHelvLight82, 22, 46, mm_dd_dot, 0, -1);
 
         const float ccx = 338.0f, ccy = 88.0f;
         canvas_.DrawAACircle4bpp(ccx, ccy, 36.0f, 14);
-        canvas_.DrawAAArc4bpp(ccx, ccy, 33.0f, 3.0f, 0.0f, 360.0f, 13);
+        canvas_.DrawAAArc4bpp(ccx, ccy, 33.0f, 3.0f, 0.0f, 360.0f, 12);
         if (exp_count > 0 && !all_items.empty()) {
             const float ratio = std::min(1.0f, static_cast<float>(exp_count) /
                                                    static_cast<float>(all_items.size()));
-            canvas_.DrawAAArc4bpp(ccx, ccy, 33.0f, 3.0f, 0.0f, 360.0f * std::max(0.15f, ratio), 2);
+            canvas_.DrawAAArc4bpp(ccx, ccy, 33.0f, 3.0f, 0.0f, 360.0f * std::max(0.15f, ratio), 1);
         }
         const std::string ec = std::to_string(exp_count);
         DrawAaText(canvas_, standby_aa::kFontHelvLight30,
                    static_cast<int>(ccx) - MeasureAa(standby_aa::kFontHelvLight30, ec) / 2, 66, ec, 0);
         const std::string ecl = (exp_count > 0) ? "临期" : "新鲜";
-        canvas_.DrawText(static_cast<int>(ccx) - canvas_.MeasureText(ecl, 1) / 2, 95, ecl, 1, 6);
+        canvas_.DrawText(static_cast<int>(ccx) - canvas_.MeasureText(ecl, 1) / 2, 95, ecl, 1, 3);
 
-        canvas_.DrawAARoundRect4bpp(20, 144, 222, 134, 12, 14);
-        canvas_.DrawAARoundRect4bpp(252, 144, 128, 134, 12, 14);
+        canvas_.DrawAARoundRect4bpp(20, 144, 214, 134, 12, 14);
+        canvas_.DrawAARoundRect4bpp(244, 144, 136, 134, 12, 14);
 
-        canvas_.DrawText(34, 154, "优先食用", 1, 6);
+        canvas_.DrawText(32, 154, "优先食用", 1, 3);
         const std::string tot = "共" + std::to_string(all_items.size()) + "样";
-        canvas_.DrawText(228 - canvas_.MeasureText(tot, 1), 154, tot, 1, 7);
+        canvas_.DrawText(222 - canvas_.MeasureText(tot, 1), 154, tot, 1, 4);
         if (all_items.empty()) {
-            canvas_.DrawText(34, 206, "冰箱空空的~", 1, 7);
+            canvas_.DrawText(32, 206, "冰箱空空的~", 1, 4);
         } else {
             const int show = std::min<int>(3, static_cast<int>(all_items.size()));
             for (int i = 0; i < show; ++i) {
                 const auto& it = all_items[i];
                 const int y = 182 + i * 31;
-                if (i > 0) canvas_.HLine(34, y - 6, 194, 13);
+                if (i > 0) canvas_.HLine(32, y - 6, 190, 12);
                 UrgencyLevel urg = UrgencyLevel::kNone;
                 const std::string tag = FormatItemDateTag(it, today, &urg);
-                DrawUrgencyDot4bpp(canvas_, 39.0f, y + 9.0f, urg);
-                canvas_.DrawText(50, y, it.name, 1, urg == UrgencyLevel::kNone ? 3 : 0, 88);
+                DrawUrgencyDot4bpp(canvas_, 37.0f, y + 9.0f, urg);
+                canvas_.DrawText(48, y, it.name, 1, 0, 84);
                 const int tw = canvas_.MeasureText(tag, 1);
                 if (urg == UrgencyLevel::kCritical) {
-                    canvas_.DrawAARoundRect4bpp(230 - tw - 10, y - 2, tw + 10, 21, 10.5f, 15);
-                    canvas_.DrawText(230 - tw - 5, y, tag, 1, 0);
+                    canvas_.DrawAARoundRect4bpp(224 - tw - 10, y - 2, tw + 10, 21, 10.5f, 15);
+                    canvas_.DrawText(224 - tw - 5, y, tag, 1, 0);
                 } else {
-                    canvas_.DrawText(230 - tw, y, tag, 1, 6);
+                    canvas_.DrawText(224 - tw, y, tag, 1, urg == UrgencyLevel::kSoon ? 1 : 4);
                 }
             }
         }
 
-        canvas_.DrawText(264, 154, "今晚推荐", 1, 6);
+        canvas_.DrawText(254, 154, "今晚推荐", 1, 3);
         if (top_recipe != nullptr) {
-            canvas_.DrawText(264, 176, top_recipe->recipe.title, 2, 1, 108);
+            canvas_.DrawText(254, 178, top_recipe->recipe.title, 1, 0, 118);
+            const std::string rsub = "匹配" + std::to_string(top_recipe->match_pct) + "%·" +
+                                     std::to_string(top_recipe->recipe.time_min) + "分";
+            canvas_.DrawText(254, 198, rsub, 1, 4, 118);
         } else {
-            canvas_.DrawText(264, 182, "暂无食谱", 1, 7);
+            canvas_.DrawText(254, 182, "暂无食谱", 1, 4);
         }
-        canvas_.HLine(264, 218, 104, 13);
-        canvas_.DrawText(264, 227, "待买 " + std::to_string(pending) + " 样", 1, 3);
-        canvas_.DrawText(264, 249,
+        canvas_.HLine(254, 222, 116, 12);
+        canvas_.DrawText(254, 230, "待买 " + std::to_string(pending) + " 样", 1, 0);
+        canvas_.DrawText(254, 251,
                          shop_a.empty() ? "已清空" : (shop_a + (pending > 1 ? "等" : "")),
-                         1, 6, 106);
+                         1, 4, 118);
     } else if (style == 2) {
-        // ---- Style 2: Kindle · 单向历书页日历封面 ----
+        // ---- Style 2: Kindle · 单向历书页日历封面（大日期 + 冰箱概览为主角，菜谱均衡排布）----
         const int fresh_pct = all_items.empty()
                                   ? 100
                                   : (100 * (static_cast<int>(all_items.size()) - exp_count)) /
                                         static_cast<int>(all_items.size());
 
-        canvas_.DrawText(24, 16, dp.header_line, 1, 6, 200);
-        canvas_.DrawText(316 - canvas_.MeasureText(upd_str, 1), 16, upd_str, 1, 7);
-        canvas_.DrawMinimalBattery(326, 19, battery_pct, charging, 6);
-        canvas_.DrawText(354, 16, bp, 1, 7);
-        canvas_.HLine(24, 40, 352, 12);
+        canvas_.DrawText(24, 16, dp.header_line, 1, 3, 200);
+        canvas_.DrawText(316 - canvas_.MeasureText(upd_str, 1), 16, upd_str, 1, 4);
+        canvas_.DrawMinimalBattery(326, 19, battery_pct, charging, 3);
+        canvas_.DrawText(354, 16, bp, 1, 4);
+        canvas_.HLine(24, 40, 352, 11);
 
-        DrawAaText(canvas_, standby_aa::kFontNewYork82, 22, 58, dp.day_num, 1, -2);
+        DrawAaText(canvas_, standby_aa::kFontNewYork82, 22, 58, dp.day_num, 0, -2);
 
-        canvas_.DrawText(132, 60, "今晚推荐", 1, 7);
+        // Center summary: Fridge status first, Tonight's dish harmoniously below
+        canvas_.DrawText(132, 60, "今日冰箱", 1, 4);
+        std::string sum_hero = "共 " + std::to_string(all_items.size()) + " 样食材";
+        if (exp_count > 0) sum_hero += " · " + std::to_string(exp_count) + " 临期";
+        canvas_.DrawText(132, 84, sum_hero, 1, 0, 170);
         if (top_recipe != nullptr) {
-            canvas_.DrawText(132, 81, top_recipe->recipe.title, 2, 1, 164);
+            canvas_.DrawText(132, 112, "今晚推荐 · " + top_recipe->recipe.title, 1, 2, 170);
         } else {
-            canvas_.DrawText(132, 86, "暂无食谱", 1, 7);
+            canvas_.DrawText(132, 112, "全部新鲜 · 按 OK 唤醒", 1, 4, 170);
         }
-        std::string sub = "共" + std::to_string(all_items.size()) + "样";
-        if (exp_count > 0) sub += " · " + std::to_string(exp_count) + "样优先吃";
-        else sub += " · 全部新鲜";
-        canvas_.DrawText(132, 118, sub, 1, 6, 164);
 
         const float rcx = 344.0f, rcy = 94.0f;
-        canvas_.DrawAAArc4bpp(rcx, rcy, 29.0f, 3.4f, 0.0f, 360.0f, 13);
+        canvas_.DrawAAArc4bpp(rcx, rcy, 29.0f, 3.4f, 0.0f, 360.0f, 12);
         if (fresh_pct > 0) {
-            canvas_.DrawAAArc4bpp(rcx, rcy, 29.0f, 3.4f, 0.0f, 360.0f * fresh_pct / 100.0f, 2);
+            canvas_.DrawAAArc4bpp(rcx, rcy, 29.0f, 3.4f, 0.0f, 360.0f * fresh_pct / 100.0f, 1);
         }
         const std::string fp = std::to_string(fresh_pct) + "%";
         DrawAaText(canvas_, standby_aa::kFontHelvMed18,
-                   static_cast<int>(rcx) - MeasureAa(standby_aa::kFontHelvMed18, fp) / 2, 85, fp, 1);
+                   static_cast<int>(rcx) - MeasureAa(standby_aa::kFontHelvMed18, fp) / 2, 85, fp, 0);
         const std::string fl = "新鲜度";
-        canvas_.DrawText(static_cast<int>(rcx) - canvas_.MeasureText(fl, 1) / 2, 129, fl, 1, 7);
+        canvas_.DrawText(static_cast<int>(rcx) - canvas_.MeasureText(fl, 1) / 2, 129, fl, 1, 4);
 
-        canvas_.HLine(24, 154, 352, 13);
-        canvas_.DrawText(24, 163, "优先食用", 1, 7);
+        canvas_.HLine(24, 154, 352, 12);
+        canvas_.DrawText(24, 163, "优先食用", 1, 3);
         if (all_items.empty()) {
-            canvas_.DrawText(24, 206, "暂无食材记录", 1, 8);
+            canvas_.DrawText(24, 206, "暂无食材记录", 1, 4);
         } else {
             const int show = std::min<int>(3, static_cast<int>(all_items.size()));
             for (int i = 0; i < show; ++i) {
@@ -759,30 +766,30 @@ esp_err_t FridgeUi::RenderStandby4bpp(const std::string& date_str,
                 UrgencyLevel urg = UrgencyLevel::kNone;
                 const std::string tag = FormatItemDateTag(it, today, &urg);
                 DrawUrgencyDot4bpp(canvas_, 29.0f, y + 9.0f, urg);
-                canvas_.DrawText(40, y, it.name, 1, urg == UrgencyLevel::kNone ? 3 : 0, 86);
+                canvas_.DrawText(40, y, it.name, 1, 0, 86);
                 const int tw = canvas_.MeasureText(tag, 1);
-                canvas_.DrawText(220 - tw, y, tag, 1, urg == UrgencyLevel::kCritical ? 0 : 6);
+                canvas_.DrawText(220 - tw, y, tag, 1, urg == UrgencyLevel::kCritical ? 0 : 3);
             }
         }
 
-        canvas_.VLine(238, 164, 102, 13);
-        canvas_.DrawText(254, 163, "待买清单 · " + std::to_string(pending), 1, 7);
+        canvas_.VLine(238, 164, 102, 12);
+        canvas_.DrawText(254, 163, "待买清单 · " + std::to_string(pending), 1, 3);
         int srow = 0;
         for (const auto& s : shopping) {
             if (s.checked) continue;
             const int y = 186 + srow * 28;
-            canvas_.DrawAACircle4bpp(259.0f, y + 9.0f, 1.8f, 9);
-            canvas_.DrawText(268, y, s.name, 1, 3, 74);
-            canvas_.DrawText(376 - canvas_.MeasureText(s.qty, 1), y, s.qty, 1, 8);
+            canvas_.DrawAACircle4bpp(259.0f, y + 9.0f, 1.8f, 6);
+            canvas_.DrawText(268, y, s.name, 1, 0, 74);
+            canvas_.DrawText(376 - canvas_.MeasureText(s.qty, 1), y, s.qty, 1, 4);
             if (++srow >= 3) break;
         }
-        if (srow == 0) canvas_.DrawText(254, 206, "清单已清空", 1, 8);
+        if (srow == 0) canvas_.DrawText(254, 206, "清单已清空", 1, 4);
 
         char foot[64];
         std::snprintf(foot, sizeof(foot), "按 OK 唤醒 · 明早 %02d:00 刷新", wake_hour);
-        canvas_.DrawTextCentered(276, foot, 1, 10);
+        canvas_.DrawTextCentered(276, foot, 1, 5);
     } else if (style == 3) {
-        // ---- Style 3: 原研哉 · 高级黑白撞色美术馆海报（MM.DD 大日期主角）----
+        // ---- Style 3: 原研哉 · 高级黑白撞色美术馆海报（均衡黑白灰层级）----
         canvas_.FillRect(0, 0, 400, 104, 1);
         DrawAaText(canvas_, standby_aa::kFontHelvThin68, 22, 19, mm_dd_dot, 15, -1);
 
@@ -790,54 +797,54 @@ esp_err_t FridgeUi::RenderStandby4bpp(const std::string& date_str,
                                     ? dp.month_day_cn
                                     : (dp.year_str.empty() ? dp.weekday_full
                                                            : (dp.year_str + " · " + dp.weekday_full));
-        canvas_.DrawText(376 - canvas_.MeasureText(hd1, 1), 22, hd1, 1, 14);
-        canvas_.DrawText(376 - canvas_.MeasureText(upd_str, 1), 44, upd_str, 1, 10);
-        canvas_.DrawMinimalBattery(316, 72, battery_pct, charging, 12);
-        canvas_.DrawText(344, 69, bp, 1, 11);
+        canvas_.DrawText(376 - canvas_.MeasureText(hd1, 1), 22, hd1, 1, 15);
+        canvas_.DrawText(376 - canvas_.MeasureText(upd_str, 1), 44, upd_str, 1, 12);
+        canvas_.DrawMinimalBattery(316, 72, battery_pct, charging, 13);
+        canvas_.DrawText(344, 69, bp, 1, 13);
 
         auto draw_kpi = [&](int x, const std::string& num, const std::string& label, uint8_t ng) {
             DrawAaText(canvas_, standby_aa::kFontHelvLight30, x, 116, num, ng);
-            canvas_.DrawText(x + MeasureAa(standby_aa::kFontHelvLight30, num) + 6, 124, label, 1, 7);
+            canvas_.DrawText(x + MeasureAa(standby_aa::kFontHelvLight30, num) + 6, 124, label, 1, 4);
         };
-        draw_kpi(24, std::to_string(all_items.size()), "库存", 1);
-        draw_kpi(150, std::to_string(exp_count), "临期优先", exp_count > 0 ? 0 : 4);
-        draw_kpi(288, std::to_string(pending), "待买", 3);
-        canvas_.HLine(24, 152, 352, 13);
+        draw_kpi(24, std::to_string(all_items.size()), "库存", 0);
+        draw_kpi(150, std::to_string(exp_count), "临期优先", 0);
+        draw_kpi(288, std::to_string(pending), "待买", 0);
+        canvas_.HLine(24, 152, 352, 12);
 
         if (all_items.empty()) {
-            canvas_.DrawText(24, 204, "暂无食材记录", 1, 7);
+            canvas_.DrawText(24, 204, "暂无食材记录", 1, 4);
         } else {
             const int show = std::min<int>(3, static_cast<int>(all_items.size()));
             for (int i = 0; i < show; ++i) {
                 const auto& it = all_items[i];
                 const int y = 166 + i * 36;
-                if (i > 0) canvas_.HLine(24, y - 8, 196, 14);
+                if (i > 0) canvas_.HLine(24, y - 8, 196, 13);
                 UrgencyLevel urg = UrgencyLevel::kNone;
                 const std::string tag = FormatItemDateTag(it, today, &urg);
                 DrawUrgencyDot4bpp(canvas_, 29.0f, y + 9.0f, urg);
-                canvas_.DrawText(40, y, it.name, 1, urg == UrgencyLevel::kNone ? 3 : 0, 82);
-                canvas_.DrawText(122, y, it.qty, 1, 8, 36);
+                canvas_.DrawText(40, y, it.name, 1, 0, 82);
+                canvas_.DrawText(122, y, it.qty, 1, 4, 36);
                 const int tw = canvas_.MeasureText(tag, 1);
-                canvas_.DrawText(220 - tw, y, tag, 1, urg == UrgencyLevel::kCritical ? 0 : 6);
+                canvas_.DrawText(220 - tw, y, tag, 1, urg == UrgencyLevel::kCritical ? 0 : 3);
             }
         }
 
-        canvas_.VLine(238, 164, 108, 13);
-        canvas_.DrawText(252, 166, "今晚推荐", 1, 7);
+        canvas_.VLine(238, 164, 108, 12);
+        canvas_.DrawText(252, 166, "今晚推荐", 1, 4);
         if (top_recipe != nullptr) {
-            canvas_.DrawText(252, 190, top_recipe->recipe.title, 2, 1, 128);
+            canvas_.DrawText(252, 192, top_recipe->recipe.title, 1, 0, 128);
             const std::string m = "匹配" + std::to_string(top_recipe->match_pct) + "% · " +
                                   std::to_string(top_recipe->recipe.time_min) + "分";
-            canvas_.DrawText(252, 228, m, 1, 6, 128);
-            canvas_.DrawAARoundRect4bpp(252, 254, 122, 4, 2, 13);
+            canvas_.DrawText(252, 218, m, 1, 4, 128);
+            canvas_.DrawAARoundRect4bpp(252, 246, 122, 4, 2, 13);
             const float fw = std::max(8.0f, 122.0f * std::clamp(top_recipe->match_pct, 0, 100) / 100.0f);
-            canvas_.DrawAARoundRect4bpp(252, 254, fw, 4, 2, 1);
+            canvas_.DrawAARoundRect4bpp(252, 246, fw, 4, 2, 2);
         } else {
-            canvas_.DrawText(252, 196, "暂无食谱", 1, 7);
+            canvas_.DrawText(252, 196, "暂无食谱", 1, 4);
         }
-        canvas_.DrawTextCentered(279, "按 OK 唤醒", 1, 11);
+        canvas_.DrawTextCentered(279, "按 OK 唤醒", 1, 5);
     } else {
-        // ---- Style 4: 温馨圆角卡片看板（精修统一版，与圆角卡片内页浑然一体）----
+        // ---- Style 4: 温馨圆角卡片看板（均衡黑白灰层级，库存与菜谱协调不抢戏）----
         canvas_.Clear(14);
         auto card = [&](int x, int y, int w, int h) {
             canvas_.FillRoundRectR(x + 2, y + 2, w, h, 10, 12);
@@ -852,79 +859,79 @@ esp_err_t FridgeUi::RenderStandby4bpp(const std::string& date_str,
 
         card(10, 10, 380, 56);
         canvas_.DrawMascotPixel(18, 18, 2, exp_count > 0);
-        DrawAaText(canvas_, standby_aa::kFontHelvLight30, 68, 22, mm_dd_slash, 1, -1);
-        canvas_.VLine(152, 20, 36, 13);
+        DrawAaText(canvas_, standby_aa::kFontHelvLight30, 68, 22, mm_dd_slash, 0, -1);
+        canvas_.VLine(152, 20, 36, 12);
         const std::string c_hdr = (dp.weekday_full.empty() ? "" : (dp.weekday_full + " · ")) + upd_str;
-        canvas_.DrawText(164, 18, c_hdr, 1, 3, 174);
+        canvas_.DrawText(164, 18, c_hdr, 1, 1, 174);
         const std::string st_sub = exp_count > 0
                                        ? (std::to_string(exp_count) + " 样食材临期优先吃")
                                        : ("共 " + std::to_string(all_items.size()) + " 样 · 全部新鲜");
-        canvas_.DrawText(164, 39, st_sub, 1, 6, 174);
-        canvas_.DrawMinimalBattery(355, 22, battery_pct, charging, 4);
-        canvas_.DrawText(378 - canvas_.MeasureText(bp, 1), 39, bp, 1, 6);
+        canvas_.DrawText(164, 39, st_sub, 1, 4, 174);
+        canvas_.DrawMinimalBattery(355, 22, battery_pct, charging, 2);
+        canvas_.DrawText(378 - canvas_.MeasureText(bp, 1), 39, bp, 1, 3);
 
         card(10, 76, 226, 214);
         card_band(10, 76, 226, 28);
-        canvas_.DrawIcon16(UiIcon::kFridge, 18, 82, 2);
-        canvas_.DrawText(38, 82, "冰箱库存", 1, 1);
+        canvas_.DrawIcon16(UiIcon::kFridge, 18, 82, 1);
+        canvas_.DrawText(38, 82, "冰箱库存", 1, 0);
         const std::string cnt_s = "共" + std::to_string(all_items.size()) + "样";
-        canvas_.DrawText(226 - canvas_.MeasureText(cnt_s, 1), 82, cnt_s, 1, 6);
+        canvas_.DrawText(226 - canvas_.MeasureText(cnt_s, 1), 82, cnt_s, 1, 3);
 
         if (all_items.empty()) {
-            canvas_.DrawText(36, 168, "冰箱空空的，放点食材吧~", 1, 6);
+            canvas_.DrawText(36, 168, "冰箱空空的，放点食材吧~", 1, 4);
         } else {
             const int show = std::min<int>(5, static_cast<int>(all_items.size()));
             for (int i = 0; i < show; ++i) {
                 const auto& it = all_items[i];
                 const int y = 110 + i * 35;
-                if (i > 0) canvas_.DottedHLine(20, y - 3, 206, 3, 13);
+                if (i > 0) canvas_.DottedHLine(20, y - 3, 206, 3, 12);
                 UrgencyLevel urg = UrgencyLevel::kNone;
                 const std::string tag = FormatItemDateTag(it, today, &urg);
                 const UiIcon ico = PixelCanvas::IconForFood(food_catalog::GuessIcon(it.name, it.zone));
                 canvas_.Circle(30, y + 14, 12, urg == UrgencyLevel::kCritical ? 13 : 14, true);
-                canvas_.Circle(30, y + 14, 12, 10, false);
-                canvas_.DrawIcon16(ico, 22, y + 6, urg == UrgencyLevel::kNone ? 3 : 1);
-                canvas_.DrawText(48, y + 6, it.name, 1, urg == UrgencyLevel::kNone ? 3 : 0, 72);
-                canvas_.DrawText(120, y + 6, it.qty, 1, 7, 36);
+                canvas_.Circle(30, y + 14, 12, 9, false);
+                canvas_.DrawIcon16(ico, 22, y + 6, urg == UrgencyLevel::kNone ? 2 : 0);
+                canvas_.DrawText(48, y + 6, it.name, 1, 0, 72);
+                canvas_.DrawText(120, y + 6, it.qty, 1, 4, 36);
                 const int tw = canvas_.MeasureText(tag, 1);
                 if (urg == UrgencyLevel::kCritical) {
                     canvas_.DrawAARoundRect4bpp(228 - tw - 12, y + 4, tw + 12, 20, 10, 2);
                     canvas_.DrawText(228 - tw - 6, y + 5, tag, 1, 15);
                 } else if (urg == UrgencyLevel::kSoon) {
                     canvas_.DrawAARoundRect4bpp(228 - tw - 12, y + 4, tw + 12, 20, 10, 13);
-                    canvas_.DrawText(228 - tw - 6, y + 5, tag, 1, 1);
+                    canvas_.DrawText(228 - tw - 6, y + 5, tag, 1, 0);
                 } else {
-                    canvas_.DrawText(228 - tw, y + 6, tag, 1, 7);
+                    canvas_.DrawText(228 - tw, y + 6, tag, 1, 4);
                 }
             }
         }
 
         card(246, 76, 144, 114);
         card_band(246, 76, 144, 28);
-        canvas_.DrawIcon16(UiIcon::kPot, 254, 82, 2);
-        canvas_.DrawText(274, 82, "今晚推荐", 1, 1);
+        canvas_.DrawIcon16(UiIcon::kPot, 254, 82, 1);
+        canvas_.DrawText(274, 82, "今晚推荐", 1, 0);
         if (top_recipe != nullptr) {
-            canvas_.DrawText(256, 112, top_recipe->recipe.title, 2, 1, 126);
-            canvas_.DrawText(256, 148,
+            canvas_.DrawText(256, 116, top_recipe->recipe.title, 1, 0, 126);
+            canvas_.DrawText(256, 142,
                              "匹配" + std::to_string(top_recipe->match_pct) + "% · " +
                                  std::to_string(top_recipe->recipe.time_min) + "分",
-                             1, 5, 126);
-            canvas_.DrawAARoundRect4bpp(256, 172, 122, 5, 2.5f, 13);
+                             1, 4, 126);
+            canvas_.DrawAARoundRect4bpp(256, 168, 122, 5, 2.5f, 13);
             const float fw = std::max(10.0f, 122.0f * std::clamp(top_recipe->match_pct, 0, 100) / 100.0f);
-            canvas_.DrawAARoundRect4bpp(256, 172, fw, 5, 2.5f, 2);
+            canvas_.DrawAARoundRect4bpp(256, 168, fw, 5, 2.5f, 2);
         } else {
-            canvas_.DrawText(256, 128, "暂无食谱", 1, 6);
+            canvas_.DrawText(256, 128, "暂无食谱", 1, 4);
         }
 
         card(246, 200, 144, 90);
         card_band(246, 200, 144, 26);
-        canvas_.DrawIcon16(UiIcon::kBasket, 254, 205, 2);
-        canvas_.DrawText(274, 205, "待买清单", 1, 1);
+        canvas_.DrawIcon16(UiIcon::kBasket, 254, 205, 1);
+        canvas_.DrawText(274, 205, "待买清单", 1, 0);
         const std::string ps = std::to_string(pending) + "样";
-        canvas_.DrawText(380 - canvas_.MeasureText(ps, 1), 205, ps, 1, 4);
-        canvas_.DrawText(256, 234, shop_a.empty() ? "清单已清空~" : ("· " + shop_a), 1, 2, 124);
+        canvas_.DrawText(380 - canvas_.MeasureText(ps, 1), 205, ps, 1, 3);
+        canvas_.DrawText(256, 234, shop_a.empty() ? "清单已清空~" : ("· " + shop_a), 1, 0, 124);
         if (!shop_b.empty()) {
-            canvas_.DrawText(256, 257, "· " + shop_b + (pending > 2 ? "等" : ""), 1, 6, 124);
+            canvas_.DrawText(256, 257, "· " + shop_b + (pending > 2 ? "等" : ""), 1, 4, 124);
         }
     }
 

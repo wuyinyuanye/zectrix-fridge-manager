@@ -125,7 +125,7 @@ struct AppConfig {
     std::string ws_token;
     // Static offline shopping list page URL written into the 880B NFC tag (#<base64url> appended)
     std::string nfc_shop_url = FRIDGE_DEFAULT_NFC_SHOP_URL;
-    int sleep_minutes = 5;            // 0 = never auto-sleep on battery
+    int sleep_minutes = 3;            // 0 = never auto-sleep on battery
     int wake_hour = 8;                // Daily RTC morning refresh hour
     int ui_theme = 0;                 // 0 = 极简高级风 (MUJI/Apple/Kindle), 1 = 温馨圆角卡片风
     int standby_style = 0;            // 0=MUJI双栏, 1=Apple大时钟, 2=Kindle日历, 3=原研哉黑白, 4=温馨卡片看板

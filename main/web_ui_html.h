@@ -299,7 +299,7 @@ button.sm{padding:5px 10px;font-size:12px;border-radius:9px}
       </div>
       <div class="lbl">电池自动休眠（分钟，0=不休眠） / 次日早起刷新（点）</div>
       <div class="row">
-        <input id="c-sleep" type="number" min="0" max="120" placeholder="休眠分钟（默认5）">
+        <input id="c-sleep" type="number" min="0" max="120" placeholder="休眠分钟（默认3）">
         <input id="c-wake" type="number" min="0" max="23" placeholder="早起刷新小时（默认8）">
       </div>
     </div>
@@ -461,7 +461,7 @@ async function load(){
   if(!cfgLoaded && s.config){
     cfgLoaded=true;
     $('c-ssid').value=s.config.wifi_ssid||'';
-    $('c-sleep').value=s.config.sleep_minutes??5;
+    $('c-sleep').value=s.config.sleep_minutes??3;
     $('c-wake').value=s.config.wake_hour??8;
     $('c-theme').value=String(s.config.ui_theme??0);
     $('c-style').value=String(s.config.standby_style??0);
@@ -826,7 +826,7 @@ async function saveCfg(){
   const r=await post('/api/config',{
     wifi_ssid:$('c-ssid').value.trim(),
     wifi_pass:$('c-pass').value,
-    sleep_minutes:parseInt($('c-sleep').value||'5',10),
+    sleep_minutes:parseInt($('c-sleep').value||'3',10),
     wake_hour:parseInt($('c-wake').value||'8',10),
     ui_theme:parseInt($('c-theme').value||'0',10),
     standby_style:parseInt($('c-style').value||'0',10),
