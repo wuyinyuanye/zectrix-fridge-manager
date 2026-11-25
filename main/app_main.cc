@@ -181,6 +181,9 @@ public:
             board_.rtc()->ClearAlarmFlag();
         }
 
+        const int init_theme = store_.GetConfig().ui_theme;
+        ui_.SetTheme(init_theme);
+        last_ui_theme_ = init_theme;
         if (!rtc_wakeup) {
             ui_.ShowBootSplash("正在启动极趣小冰箱...");
         }
@@ -516,6 +519,12 @@ private:
 
     void RenderCurrentTab(bool force_full) {
         SyncNfcShopUrlIfNeeded(NowMs(), false);
+        const int cur_theme = store_.GetConfig().ui_theme;
+        if (cur_theme != last_ui_theme_) {
+            ui_.SetTheme(cur_theme);
+            last_ui_theme_ = cur_theme;
+            force_full = true;
+        }
         const UiTopBar bar = BuildTopBar();
         switch (tab_) {
             case FridgeTab::kFridge: {
@@ -1496,6 +1505,7 @@ private:
     std::string focus_ingredient_;
 
     bool alarm_shown_ = false;
+    int last_ui_theme_ = -1;
     bool last_net_wifi_ = false;
     bool last_net_ap_ = false;
     int64_t last_activity_ms_ = 0;

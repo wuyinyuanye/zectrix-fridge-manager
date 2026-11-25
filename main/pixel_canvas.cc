@@ -1,6 +1,7 @@
 #include "pixel_canvas.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cstring>
 
 #include "qrcodegen.h"
@@ -1265,5 +1266,141 @@ void PixelCanvas::DrawMascotPixel(int x, int y, int scale, bool worried) {
                 }
             }
         }
+    }
+}
+
+uint8_t PixelCanvas::GetPixel4bpp(int x, int y) const {
+    if (x < 0 || x >= kWidth || y < 0 || y >= kHeight) return 15;
+    if (!mode_4bpp_) {
+        const uint8_t b = buf1_[static_cast<size_t>(y) * kStride1bpp + (x >> 3)];
+        return (b & (0x80u >> (x & 7))) ? 15 : 0;
+    }
+    const uint8_t b = buf4_[static_cast<size_t>(y) * kStride4bpp + (x >> 1)];
+    return (x & 1) ? (b & 0x0F) : (b >> 4);
+}
+
+void PixelCanvas::BlendPixel4bpp(int x, int y, uint8_t fg, float alpha) {
+    if (x < 0 || x >= kWidth || y < 0 || y >= kHeight) return;
+    if (alpha <= 0.01f) return;
+    if (!mode_4bpp_) {
+        if (alpha >= 0.5f) Pixel(x, y, fg);
+        return;
+    }
+    if (alpha >= 0.99f) {
+        Pixel(x, y, fg);
+        return;
+    }
+    const float bg = static_cast<float>(GetPixel4bpp(x, y));
+    const int g = std::clamp(static_cast<int>(std::lround(bg + (static_cast<float>(fg) - bg) * alpha)), 0, 15);
+    Pixel(x, y, static_cast<uint8_t>(g));
+}
+
+void PixelCanvas::DrawAACircle4bpp(float cx, float cy, float r, uint8_t fg) {
+    const int x0 = std::max(0, static_cast<int>(std::floor(cx - r - 1.0f)));
+    const int x1 = std::min(kWidth - 1, static_cast<int>(std::ceil(cx + r + 1.0f)));
+    const int y0 = std::max(0, static_cast<int>(std::floor(cy - r - 1.0f)));
+    const int y1 = std::min(kHeight - 1, static_cast<int>(std::ceil(cy + r + 1.0f)));
+    const float r2 = r * r;
+    for (int py = y0; py <= y1; ++py) {
+        for (int px = x0; px <= x1; ++px) {
+            int hit = 0;
+            for (int sy = 0; sy < 4; ++sy) {
+                const float dy = (py + (sy + 0.5f) * 0.25f) - cy;
+                for (int sx = 0; sx < 4; ++sx) {
+                    const float dx = (px + (sx + 0.5f) * 0.25f) - cx;
+                    if (dx * dx + dy * dy <= r2) hit++;
+                }
+            }
+            if (hit > 0) BlendPixel4bpp(px, py, fg, hit / 16.0f);
+        }
+    }
+}
+
+void PixelCanvas::DrawAAArc4bpp(float cx, float cy, float r_mid, float thick,
+                                float start_deg, float sweep_deg, uint8_t fg) {
+    static constexpr float kPi = 3.14159265358979323846f;
+    const float r_in = r_mid - thick * 0.5f;
+    const float r_out = r_mid + thick * 0.5f;
+    const int x0 = std::max(0, static_cast<int>(std::floor(cx - r_out - 2.0f)));
+    const int x1 = std::min(kWidth - 1, static_cast<int>(std::ceil(cx + r_out + 2.0f)));
+    const int y0 = std::max(0, static_cast<int>(std::floor(cy - r_out - 2.0f)));
+    const int y1 = std::min(kHeight - 1, static_cast<int>(std::ceil(cy + r_out + 2.0f)));
+    const bool full = (sweep_deg >= 359.5f);
+    const float a0 = (start_deg - 90.0f) * kPi / 180.0f;
+    const float a1 = (start_deg + sweep_deg - 90.0f) * kPi / 180.0f;
+    const float cap0x = cx + std::cos(a0) * r_mid, cap0y = cy + std::sin(a0) * r_mid;
+    const float cap1x = cx + std::cos(a1) * r_mid, cap1y = cy + std::sin(a1) * r_mid;
+    const float cap_r2 = (thick * 0.5f) * (thick * 0.5f);
+
+    for (int py = y0; py <= y1; ++py) {
+        for (int px = x0; px <= x1; ++px) {
+            int hit = 0;
+            for (int sy = 0; sy < 4; ++sy) {
+                const float y = py + (sy + 0.5f) * 0.25f;
+                const float dy = y - cy;
+                for (int sx = 0; sx < 4; ++sx) {
+                    const float x = px + (sx + 0.5f) * 0.25f;
+                    const float dx = x - cx;
+                    const float d = std::sqrt(dx * dx + dy * dy);
+                    bool in = false;
+                    if (d >= r_in && d <= r_out) {
+                        if (full) {
+                            in = true;
+                        } else {
+                            float ang = std::atan2(dy, dx) * 180.0f / kPi + 90.0f;
+                            while (ang < 0.0f) ang += 360.0f;
+                            float rel = ang - start_deg;
+                            while (rel < 0.0f) rel += 360.0f;
+                            if (rel <= sweep_deg) in = true;
+                        }
+                    }
+                    if (!in && !full) {
+                        const float d0 = (x - cap0x) * (x - cap0x) + (y - cap0y) * (y - cap0y);
+                        const float d1 = (x - cap1x) * (x - cap1x) + (y - cap1y) * (y - cap1y);
+                        if (d0 <= cap_r2 || d1 <= cap_r2) in = true;
+                    }
+                    if (in) hit++;
+                }
+            }
+            if (hit > 0) BlendPixel4bpp(px, py, fg, hit / 16.0f);
+        }
+    }
+}
+
+void PixelCanvas::DrawAARoundRect4bpp(float x, float y, float w, float h, float r, uint8_t fg) {
+    const int x0 = std::max(0, static_cast<int>(std::floor(x - 1.0f)));
+    const int x1 = std::min(kWidth - 1, static_cast<int>(std::ceil(x + w + 1.0f)));
+    const int y0 = std::max(0, static_cast<int>(std::floor(y - 1.0f)));
+    const int y1 = std::min(kHeight - 1, static_cast<int>(std::ceil(y + h + 1.0f)));
+    const float hx = w * 0.5f - r, hy = h * 0.5f - r;
+    const float mcx = x + w * 0.5f, mcy = y + h * 0.5f;
+    for (int py = y0; py <= y1; ++py) {
+        for (int px = x0; px <= x1; ++px) {
+            int hit = 0;
+            for (int sy = 0; sy < 4; ++sy) {
+                const float qy = std::fabs((py + (sy + 0.5f) * 0.25f) - mcy) - hy;
+                for (int sx = 0; sx < 4; ++sx) {
+                    const float qx = std::fabs((px + (sx + 0.5f) * 0.25f) - mcx) - hx;
+                    const float ox = std::max(qx, 0.0f), oy = std::max(qy, 0.0f);
+                    if (std::sqrt(ox * ox + oy * oy) + std::min(std::max(qx, qy), 0.0f) - r <= 0.0f) hit++;
+                }
+            }
+            if (hit > 0) BlendPixel4bpp(px, py, fg, hit / 16.0f);
+        }
+    }
+}
+
+void PixelCanvas::DrawMinimalBattery(int x, int y, int pct, bool charging, uint8_t fg) {
+    RoundRectR(x, y, 21, 11, 3, fg, 1);
+    FillRect(x + 21, y + 3, 2, 5, fg);
+    const int fw = std::clamp((17 * pct + 50) / 100, 1, 17);
+    FillRoundRectR(x + 2, y + 2, fw, 7, 1, fg);
+    if (charging) {
+        // Tiny clean charging notch on the left of the battery
+        Pixel(x - 4, y + 5, fg);
+        Pixel(x - 3, y + 4, fg);
+        Pixel(x - 3, y + 5, fg);
+        Pixel(x - 2, y + 5, fg);
+        Pixel(x - 3, y + 6, fg);
     }
 }

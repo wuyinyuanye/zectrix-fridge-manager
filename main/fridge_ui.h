@@ -19,6 +19,11 @@ enum class FridgeTab : int {
     kCount = 5,
 };
 
+enum class UiTheme : int {
+    kMinimal = 0,  // MUJI / Apple / Kindle minimalist luxury
+    kCard = 1,     // Warm kitchen rounded card stationery
+};
+
 struct UiTopBar {
     std::string hm_time;
     bool wifi_ok = false;
@@ -33,11 +38,17 @@ class FridgeUi {
 public:
     explicit FridgeUi(zectrix_epd_handle_t epd = nullptr);
     void SetEpd(zectrix_epd_handle_t epd) { epd_ = epd; }
+    void SetTheme(UiTheme theme) { theme_ = theme; }
+    void SetTheme(int theme_id) { theme_ = (theme_id == 1) ? UiTheme::kCard : UiTheme::kMinimal; }
+    UiTheme theme() const { return theme_; }
+    bool is_minimal() const { return theme_ == UiTheme::kMinimal; }
 
     esp_err_t ClearDisplay();
     esp_err_t ShowBootSplash(const std::string& subtitle);
 
-    // Page 0: True 4bpp 16-level grayscale standby poster (style 0 = 手账看板, 1 = 极简大时钟桌搭)
+    // Page 0: True 4bpp 16-level grayscale standby poster
+    //   0 = MUJI 瑞士双栏, 1 = Apple 极简大时钟, 2 = Kindle 日历书页,
+    //   3 = 原研哉 黑白撞色, 4 = 温馨圆角卡片看板
     esp_err_t RenderStandby4bpp(const std::string& date_str,
                                 const std::string& hm_str,
                                 int battery_pct, bool charging,
@@ -158,6 +169,7 @@ private:
     int partial_count_ = 0;
     int pill_partial_count_ = 0;
     bool nav_focus_ = false;  // latched by DrawTopNav for the legend of the same frame
+    UiTheme theme_ = UiTheme::kMinimal;
 };
 
 #endif  // ZECTRIX_FRIDGE_UI_H_

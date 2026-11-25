@@ -270,7 +270,29 @@ button.sm{padding:5px 10px;font-size:12px;border-radius:9px}
 
   <div id="p-cfg" class="hide">
     <div class="card">
-      <div class="card-title">1. 家庭 2.4GHz Wi-Fi 与省电</div>
+      <div class="card-title">1. 墨水屏外观与待机封面</div>
+      <div class="meta" style="margin:0 0 8px">整机内页支持 2 套风格同步换肤，休眠常亮支持 5 套真 16 灰阶海报自由切换。</div>
+      <div class="lbl">整机界面风格（库存 / 食谱 / 烹饪 / 采购 / 弹窗同步）</div>
+      <select id="c-theme" onchange="onThemeChange()">
+        <option value="0">极简高级风（MUJI / Apple / Kindle · 默认）</option>
+        <option value="1">温馨圆角卡片风（温暖厨房手账 · 像素图标）</option>
+      </select>
+      <div class="lbl">16 灰阶待机封面（小憩常亮海报）</div>
+      <select id="c-style">
+        <option value="0">MUJI · 瑞士双栏呼吸感（极简）</option>
+        <option value="1">Apple · 极简大时钟桌搭（极简）</option>
+        <option value="2">Kindle · 单向历书页日历（极简）</option>
+        <option value="3">原研哉 · 黑白撞色海报（极简）</option>
+        <option value="4">温馨圆角卡片看板（卡片风配套）</option>
+      </select>
+      <div class="row" style="margin-top:10px">
+        <button style="flex:1" onclick="applyTheme()">立即应用外观</button>
+      </div>
+      <div class="msg hide" id="theme-msg"></div>
+    </div>
+
+    <div class="card">
+      <div class="card-title">2. 家庭 2.4GHz Wi-Fi 与省电</div>
       <div class="row">
         <input id="c-ssid" placeholder="Wi-Fi 名称（仅支持 2.4G）">
         <input id="c-pass" type="password" placeholder="Wi-Fi 密码（留空不改）">
@@ -280,15 +302,10 @@ button.sm{padding:5px 10px;font-size:12px;border-radius:9px}
         <input id="c-sleep" type="number" min="0" max="120" placeholder="休眠分钟（默认5）">
         <input id="c-wake" type="number" min="0" max="23" placeholder="早起刷新小时（默认8）">
       </div>
-      <div class="lbl">16 灰阶待机封面风格</div>
-      <select id="c-style">
-        <option value="0">温馨手账看板（默认 · 桌布便签风格）</option>
-        <option value="1">极简大时钟桌搭（大号时钟 · 留白海报）</option>
-      </select>
     </div>
 
     <div class="card">
-      <div class="card-title">2. 小智免费语音（0 API Key）</div>
+      <div class="card-title">3. 小智免费语音（0 API Key）</div>
       <div class="meta" style="margin:0 0 8px">
         默认直连公开免费 <b>xiaozhi.me</b>（免充值、按住 OK 说话自动控冰箱）；也可切换自家局域网 NAS / 私有小智服务。
       </div>
@@ -315,7 +332,7 @@ button.sm{padding:5px 10px;font-size:12px;border-radius:9px}
     </div>
 
     <div class="card">
-      <div class="card-title">3. 设备电源</div>
+      <div class="card-title">4. 设备电源</div>
       <div class="meta" style="margin:0 0 8px">
         远程重启设备，或清空墨水屏并关机（所有库存、菜谱与配置都会完整保留）。
       </div>
@@ -446,6 +463,7 @@ async function load(){
     $('c-ssid').value=s.config.wifi_ssid||'';
     $('c-sleep').value=s.config.sleep_minutes??5;
     $('c-wake').value=s.config.wake_hour??8;
+    $('c-theme').value=String(s.config.ui_theme??0);
     $('c-style').value=String(s.config.standby_style??0);
     const ota=s.config.ota_url||PUBLIC_OTA;
     $('c-ota').value=ota;
@@ -783,6 +801,26 @@ async function sendAi(){
   }
   load();
 }
+function onThemeChange(){
+  const t=parseInt($('c-theme').value||'0',10);
+  const st=parseInt($('c-style').value||'0',10);
+  if(t===1) $('c-style').value='4';
+  else if(st===4) $('c-style').value='0';
+}
+async function applyTheme(){
+  const m=$('theme-msg'); m.classList.remove('hide','ok','err'); m.textContent='正在同步墨水屏...';
+  const r=await post('/api/config',{
+    ui_theme:parseInt($('c-theme').value||'0',10),
+    standby_style:parseInt($('c-style').value||'0',10)
+  });
+  if(r.ok){
+    m.classList.add('ok');
+    m.textContent='✓ 外观已切换！设备屏幕已立即刷新，休眠小憩时生效新待机封面';
+  } else {
+    m.classList.add('err');
+    m.textContent='✗ 切换失败，请重试';
+  }
+}
 async function saveCfg(){
   const m=$('cfg-msg'); m.classList.remove('hide','ok','err'); m.textContent='保存中...';
   const r=await post('/api/config',{
@@ -790,6 +828,7 @@ async function saveCfg(){
     wifi_pass:$('c-pass').value,
     sleep_minutes:parseInt($('c-sleep').value||'5',10),
     wake_hour:parseInt($('c-wake').value||'8',10),
+    ui_theme:parseInt($('c-theme').value||'0',10),
     standby_style:parseInt($('c-style').value||'0',10),
     ota_url:$('c-ota').value.trim()||PUBLIC_OTA,
     nfc_shop_url:$('c-nfc').value.trim(),

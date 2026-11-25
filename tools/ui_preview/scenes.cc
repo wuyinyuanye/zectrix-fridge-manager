@@ -49,13 +49,23 @@ int main(int argc, char** argv) {
     const auto shopping = store.GetShoppingList();
     const auto timers = store.GetTimers();
 
+    ui.SetTheme(UiTheme::kMinimal);
     Check(ui.ShowBootSplash("正在连接 Wi-Fi..."), "boot"); Shot("00_boot");
     Check(ui.RenderStandby4bpp("11/24 周二", "18:42", 76, false, items,
-                               recipes.empty() ? nullptr : &recipes[0], shopping, 8, 0), "standby");
-    Shot("01_standby_4bpp");
+                               recipes.empty() ? nullptr : &recipes[0], shopping, 8, 0), "standby muji");
+    Shot("01_standby_muji_4bpp");
     Check(ui.RenderStandby4bpp("11/24 周二", "18:42", 76, false, items,
-                               recipes.empty() ? nullptr : &recipes[0], shopping, 8, 1), "standby minimal");
-    Shot("01b_standby_minimal_4bpp");
+                               recipes.empty() ? nullptr : &recipes[0], shopping, 8, 1), "standby apple");
+    Shot("01b_standby_apple_4bpp");
+    Check(ui.RenderStandby4bpp("11/24 周二", "18:42", 76, false, items,
+                               recipes.empty() ? nullptr : &recipes[0], shopping, 8, 2), "standby kindle");
+    Shot("01c_standby_kindle_4bpp");
+    Check(ui.RenderStandby4bpp("11/24 周二", "18:42", 76, false, items,
+                               recipes.empty() ? nullptr : &recipes[0], shopping, 8, 3), "standby monolith");
+    Shot("01d_standby_monolith_4bpp");
+    Check(ui.RenderStandby4bpp("11/24 周二", "18:42", 76, false, items,
+                               recipes.empty() ? nullptr : &recipes[0], shopping, 8, 4), "standby card");
+    Shot("01e_standby_card_4bpp");
 
     UiTopBar bar_menu = bar;
     bar_menu.nav_focus = true;
@@ -134,6 +144,16 @@ int main(int argc, char** argv) {
     Check(ui.ShowAlarmScreen(ringing), "alarm"); Shot("22_alarm");
     Check(ui.RenderSettingsPage(bar, cfg, "192.168.1.50", "http://192.168.1.50/", "手机扫码管理", "", pwr, 3, true), "base");
     Check(ui.RenderPowerMenuPopup(0), "power menu"); Shot("23_power_menu");
+
+    // Spot-check Theme 1 (Warm Rounded Card Stationery) end-to-end
+    ui.SetTheme(UiTheme::kCard);
+    Check(ui.RenderFridgePage(bar, all, fr, fz, items, 1, true), "card fridge"); Shot("24_card_fridge");
+    Check(ui.RenderItemPopup(items[0], 0, true), "card popup"); Shot("25_card_item_popup");
+    Check(ui.RenderRecipePage(bar, recipes, 0, 0, true), "card recipe"); Shot("26_card_recipe");
+    Check(ui.RenderCookPage(bar_timer, r0, 1, timers, true), "card cook"); Shot("27_card_cook");
+    Check(ui.RenderShoppingPage(bar, shopping, 1, true), "card shopping"); Shot("28_card_shopping");
+    Check(ui.RenderSettingsPage(bar, cfg, "192.168.1.50", "http://192.168.1.50/", "手机扫码管理", "", pwr, 0, true), "card settings");
+    Shot("29_card_settings");
 
     std::fprintf(stderr, "%s\n", g_fail ? "SOME SCENES FAILED" : "all scenes rendered");
     return g_fail ? 1 : 0;

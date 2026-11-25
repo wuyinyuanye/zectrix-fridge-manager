@@ -127,7 +127,8 @@ struct AppConfig {
     std::string nfc_shop_url = FRIDGE_DEFAULT_NFC_SHOP_URL;
     int sleep_minutes = 5;            // 0 = never auto-sleep on battery
     int wake_hour = 8;                // Daily RTC morning refresh hour
-    int standby_style = 0;            // 0 = 温馨手账看板, 1 = 极简大时钟桌搭
+    int ui_theme = 0;                 // 0 = 极简高级风 (MUJI/Apple/Kindle), 1 = 温馨圆角卡片风
+    int standby_style = 0;            // 0=MUJI双栏, 1=Apple大时钟, 2=Kindle日历, 3=原研哉黑白, 4=温馨卡片看板
 };
 
 struct LocalFastAction {

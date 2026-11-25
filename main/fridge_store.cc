@@ -581,8 +581,11 @@ void FridgeStore::LoadConfigFromNvsLocked() {
     if (nvs_get_i32(h, "wake_hr", &v) == ESP_OK) {
         config_.wake_hour = std::clamp<int>(v, 0, 23);
     }
+    if (nvs_get_i32(h, "ui_theme", &v) == ESP_OK) {
+        config_.ui_theme = std::clamp<int>(v, 0, 1);
+    }
     if (nvs_get_i32(h, "stby_sty", &v) == ESP_OK) {
-        config_.standby_style = std::clamp<int>(v, 0, 1);
+        config_.standby_style = std::clamp<int>(v, 0, 4);
     }
     nvs_close(h);
 }
@@ -597,6 +600,8 @@ esp_err_t FridgeStore::SaveConfig(const AppConfig& cfg) {
     config_ = cfg;
     config_.sleep_minutes = std::clamp(config_.sleep_minutes, 0, 720);
     config_.wake_hour = std::clamp(config_.wake_hour, 0, 23);
+    config_.ui_theme = std::clamp(config_.ui_theme, 0, 1);
+    config_.standby_style = std::clamp(config_.standby_style, 0, 4);
     nvs_handle_t h = 0;
     esp_err_t err = nvs_open(kNvsNs, NVS_READWRITE, &h);
     if (err != ESP_OK) return err;
@@ -607,6 +612,7 @@ esp_err_t FridgeStore::SaveConfig(const AppConfig& cfg) {
     nvs_set_str(h, "nfc_url", config_.nfc_shop_url.c_str());
     nvs_set_i32(h, "sleep_min", config_.sleep_minutes);
     nvs_set_i32(h, "wake_hr", config_.wake_hour);
+    nvs_set_i32(h, "ui_theme", config_.ui_theme);
     nvs_set_i32(h, "stby_sty", config_.standby_style);
     err = nvs_commit(h);
     nvs_close(h);
@@ -1830,6 +1836,7 @@ std::string FridgeStore::ExportStateJson(const std::string& ip, bool wifi_ok, bo
     cJSON_AddBoolToObject(cfg, "has_ws_token", !config_.ws_token.empty());
     cJSON_AddNumberToObject(cfg, "sleep_minutes", config_.sleep_minutes);
     cJSON_AddNumberToObject(cfg, "wake_hour", config_.wake_hour);
+    cJSON_AddNumberToObject(cfg, "ui_theme", config_.ui_theme);
     cJSON_AddNumberToObject(cfg, "standby_style", config_.standby_style);
 
     char* printed = cJSON_PrintUnformatted(root);

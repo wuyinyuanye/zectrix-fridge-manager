@@ -97,6 +97,15 @@ public:
     // Chunky pixel-art fridge mascot: 20x20 cells * scale (scale 2 == 40px)
     void DrawMascotPixel(int x, int y, int scale, bool worried);
 
+    // ---- 16-gray (4bpp) anti-aliased vector & minimalist UI primitives ----
+    uint8_t GetPixel4bpp(int x, int y) const;
+    void BlendPixel4bpp(int x, int y, uint8_t fg, float alpha);
+    void DrawAACircle4bpp(float cx, float cy, float r, uint8_t fg);
+    void DrawAAArc4bpp(float cx, float cy, float r_mid, float thick,
+                       float start_deg, float sweep_deg, uint8_t fg);
+    void DrawAARoundRect4bpp(float x, float y, float w, float h, float r, uint8_t fg);
+    void DrawMinimalBattery(int x, int y, int pct, bool charging, uint8_t fg);
+
     // Native scannable QR code rendering
     bool DrawQrCode(int x, int y, int max_size_px, const std::string& text);
 
